@@ -1,0 +1,17 @@
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# D3 이후 생성되는 로그 파일
+logs/
+*.log
+*.log.gz
+
+# 완성본 참고용 (막힐 때만 열어볼 것)
+.reference/
