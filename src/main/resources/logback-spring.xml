@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <property name="LOG_PATTERN"
+              value="%d{HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n"/>
+
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>${LOG_PATTERN}</pattern>
+        </encoder>
+    </appender>
+
+    <!--
+      공통 기본값. 프로파일을 하나도 주지 않아도 최소한 콘솔에는 나온다.
+      프로파일 블록에는 "이 환경에서 달라지는 것"만 적는다.
+    -->
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+
+    <!-- 개발 PC: 재고 확인 같은 내부 흐름까지 콘솔로 다 본다 -->
+    <springProfile name="local">
+        <logger name="com.example.logbackmdclab" level="DEBUG"/>
+    </springProfile>
+
+    <!-- 팀 공용 개발 서버: 콘솔에 더해 파일로도 남긴다. 보관은 3일이면 충분 -->
+    <springProfile name="dev">
+        <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+            <file>logs/order-app.log</file>
+            <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+                <fileNamePattern>logs/order-app.%d{yyyy-MM-dd}.log.gz</fileNamePattern>
+                <maxHistory>3</maxHistory>
+            </rollingPolicy>
+            <encoder>
+                <pattern>${LOG_PATTERN}</pattern>
+            </encoder>
+        </appender>
+
+        <logger name="com.example.logbackmdclab" level="DEBUG"/>
+
+        <root>
+            <appender-ref ref="FILE"/>
+        </root>
+    </springProfile>
+
+    <!--
+      운영: 우리 코드는 INFO, 프레임워크 소음은 WARN 이상만.
+      장애 분석에 필요하니 30일 보관하되 디스크가 터지지 않게 총량을 막는다.
+    -->
+    <springProfile name="prod">
+        <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+            <file>logs/order-app.log</file>
+            <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+                <fileNamePattern>logs/order-app.%d{yyyy-MM-dd}.log.gz</fileNamePattern>
+                <maxHistory>30</maxHistory>
+                <totalSizeCap>3GB</totalSizeCap>
+            </rollingPolicy>
+            <encoder>
+                <pattern>${LOG_PATTERN}</pattern>
+            </encoder>
+        </appender>
+
+        <logger name="com.example.logbackmdclab" level="INFO"/>
+
+        <root level="WARN">
+            <appender-ref ref="FILE"/>
+        </root>
+    </springProfile>
+
+</configuration>
