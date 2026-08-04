@@ -16,8 +16,13 @@ public class TraceIdFilter implements Filter {
         throws IOException, ServletException {
 
         String traceId = UUID.randomUUID().toString().substring(0, 8);
-        MDC.put("traceId",traceId);
+        MDC.put("traceId", traceId);
 
-        chain.doFilter(request,response);
+        try {
+            chain.doFilter(request, response);
+        } finally {
+            // 스레드는 풀로 돌아가 재사용된다. 지우지 않으면 다음 작업이 이 값을 본다.
+            MDC.clear();
+        }
     }
 }
