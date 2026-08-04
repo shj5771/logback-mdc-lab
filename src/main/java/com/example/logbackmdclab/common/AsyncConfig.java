@@ -24,8 +24,16 @@ public class AsyncConfig {
             return () -> {
                 if (callerContext != null) {
                     MDC.setContextMap(callerContext);
+                } else {
+                    // 호출한 쪽에 MDC가 없으면(예: 배치) 이 스레드에 남은 값을 걷어낸다
+                    MDC.clear();
                 }
-                runnable.run();
+
+                try {
+                    runnable.run();
+                } finally {
+                    MDC.clear();
+                }
             };
         };
     }
