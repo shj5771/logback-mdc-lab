@@ -13,9 +13,12 @@ public class OrderController {
     private static final Logger log = LoggerFactory.getLogger(OrderController.class);
 
     private final InventoryService inventoryService;
+    private final NotificationService notificationService;
 
-    public OrderController(InventoryService inventoryService) {
+    public OrderController(InventoryService inventoryService,
+                           NotificationService notificationService) {
         this.inventoryService = inventoryService;
+        this.notificationService = notificationService;
     }
 
     @PostMapping("/orders")
@@ -32,6 +35,7 @@ public class OrderController {
             return new OrderResponse(orderId, "REJECTED");
         }
 
+        notificationService.sendOrderConfirmation(orderId);
         log.info("주문 접수 완료 orderId={}", orderId);
         return new OrderResponse(orderId, "RECEIVED");
     }
