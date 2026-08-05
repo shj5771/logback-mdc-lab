@@ -5,6 +5,7 @@
               value="%d{HH:mm:ss.SSS} %-5level [%thread] [%X{traceId:-NO_TRACE}] %logger{36} - %msg%n"/>
 
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <!-- 콘솔은 사람이 눈으로 읽는다. 모든 환경에서 텍스트 -->
         <encoder>
             <pattern>${LOG_PATTERN}</pattern>
         </encoder>
@@ -31,8 +32,12 @@
                 <fileNamePattern>logs/order-app.%d{yyyy-MM-dd}.log.gz</fileNamePattern>
                 <maxHistory>3</maxHistory>
             </rollingPolicy>
-            <encoder>
-                <pattern>${LOG_PATTERN}</pattern>
+            <!--
+              파일은 사람이 아니라 수집기가 읽는다. 그래서 JSON.
+              MDC(traceId)는 LogstashEncoder가 알아서 최상위 필드로 꺼내준다.
+            -->
+            <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                <timeZone>Asia/Seoul</timeZone>
             </encoder>
         </appender>
 
@@ -55,8 +60,8 @@
                 <maxHistory>30</maxHistory>
                 <totalSizeCap>3GB</totalSizeCap>
             </rollingPolicy>
-            <encoder>
-                <pattern>${LOG_PATTERN}</pattern>
+            <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                <timeZone>Asia/Seoul</timeZone>
             </encoder>
         </appender>
 
