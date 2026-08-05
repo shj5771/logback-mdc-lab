@@ -26,6 +26,7 @@ public class OrderController {
     public OrderResponse createOrder(@RequestBody OrderRequest request) {
         String orderId = "ORD-" + UUID.randomUUID().toString().substring(0, 8);
         MDC.put("orderId", orderId);
+        log.info("주문 요청 수신 {}", request);
 
         log.info("주문 접수 시작 orderId={} userId={} productId={} quantity={}",
                 orderId, request.userId(), request.productId(), request.quantity());
