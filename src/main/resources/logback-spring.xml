@@ -4,6 +4,9 @@
     <property name="LOG_PATTERN"
               value="%d{HH:mm:ss.SSS} %-5level [%thread] [%X{traceId:-NO_TRACE}] %logger{36} - %msg%n"/>
 
+    <!-- 1234-5678-9012-3456 / 1234567890123456 둘 다 -->
+    <property name="CARD_NUMBER_REGEX" value="\d{4}-?\d{4}-?\d{4}-?\d{4}"/>
+
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <!-- 콘솔은 사람이 눈으로 읽는다. 모든 환경에서 텍스트 -->
         <encoder>
@@ -38,6 +41,16 @@
             -->
             <encoder class="net.logstash.logback.encoder.LogstashEncoder">
                 <timeZone>Asia/Seoul</timeZone>
+                <!--
+                  나가는 길목에서 한 번 더 막는다.
+                  찍는 쪽에서 실수해도 파일에는 남지 않는다.
+                -->
+                <jsonGeneratorDecorator class="net.logstash.logback.mask.MaskingJsonGeneratorDecorator">
+                    <defaultMask>****</defaultMask>
+                    <valueMask>
+                        <value>${CARD_NUMBER_REGEX}</value>
+                    </valueMask>
+                </jsonGeneratorDecorator>
             </encoder>
         </appender>
 
@@ -62,6 +75,16 @@
             </rollingPolicy>
             <encoder class="net.logstash.logback.encoder.LogstashEncoder">
                 <timeZone>Asia/Seoul</timeZone>
+                <!--
+                  나가는 길목에서 한 번 더 막는다.
+                  찍는 쪽에서 실수해도 파일에는 남지 않는다.
+                -->
+                <jsonGeneratorDecorator class="net.logstash.logback.mask.MaskingJsonGeneratorDecorator">
+                    <defaultMask>****</defaultMask>
+                    <valueMask>
+                        <value>${CARD_NUMBER_REGEX}</value>
+                    </valueMask>
+                </jsonGeneratorDecorator>
             </encoder>
         </appender>
 
