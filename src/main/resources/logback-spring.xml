@@ -107,10 +107,21 @@
             </encoder>
         </appender>
 
+        <!--
+          운영에서는 유실이 더 치명적이다. dev와 같은 값을 쓴다.
+          discardingThreshold=0이 없으면 큐가 차는 순간 INFO가 조용히 사라진다.
+        -->
+        <appender name="ASYNC_FILE" class="ch.qos.logback.classic.AsyncAppender">
+            <appender-ref ref="FILE"/>
+            <queueSize>2048</queueSize>
+            <discardingThreshold>0</discardingThreshold>
+            <neverBlock>false</neverBlock>
+        </appender>
+
         <logger name="com.example.logbackmdclab" level="INFO"/>
 
         <root level="WARN">
-            <appender-ref ref="FILE"/>
+            <appender-ref ref="ASYNC_FILE"/>
         </root>
     </springProfile>
 
