@@ -14,27 +14,40 @@ cd /tmp/wt-println && ./gradlew bootRun
 for i in $(seq 1 100); do
   curl -s -X POST localhost:8080/orders \
     -H 'Content-Type: application/json' \
-    -d "{\"userId\":\"u$i\",\"productId\":\"TV-$i\",\"quantity\":1,\"cardNumber\":\"1234-5678-9012-3456\"}" &
+    -d "{\"userId\":\"u$i\",\"productId\":\"TV-$((i % 5))\",\"quantity\":1,\"cardNumber\":\"1234-5678-9012-3456\"}" &
 done; wait
 ```
 
-주문 한 건은 네 줄을 남긴다.
+> 상품을 5종으로 좁힌 것은 의도적이다. 요청마다 `productId` 를 다르게 주면
+> 아래 관찰 3 — 로그 줄이 서로 구별되지 않는 상황 — 이 재현되지 않는다.
+> 실제 서비스에서 인기 상품에 주문이 몰리는 상황에 해당한다.
+
+주문 한 건은 네 줄을 남긴다. 요청을 하나만 보내면 이렇게 나온다.
 
 ```
-주문 접수 시작 orderId=ORD-9e37d142 userId=warmup productId=WARM quantity=1
+주문 접수 시작 orderId=ORD-00cd7d0a userId=warmup productId=WARM quantity=1
 재고 확인 요청 productId=WARM quantity=1
 재고 확인 응답 productId=WARM enough=true
-주문 접수 완료 orderId=ORD-9e37d142
+주문 접수 완료 orderId=ORD-00cd7d0a
 ```
+
+재고가 부족하면 마지막 줄이 `주문 거절 ... reason=OUT_OF_STOCK` 으로 바뀐다.
+어느 쪽이든 한 요청이 네 줄이라는 점은 같다.
 
 ## 관찰 1 — 동시 요청의 출력은 인터리브된다
 
 요청을 하나씩 보내면 위와 같이 네 줄이 붙어서 나오지만, 동시 100건에서는 그렇지 않다.
 
 ```
-주문 접수 시작 orderId=ORD-c93119e8 userId=u5 productId=TV-5 quantity=1
-재고 확인 요청 productId=TV-5 quantity=1
-주문 접수 시작 orderId=ORD-4ee9f779 userId=u3 productId=TV-3 quantity=1
+주문 접수 시작 orderId=ORD-7647ee95 userId=u20 productId=TV-0 quantity=1
+재고 확인 요청 productId=TV-0 quantity=1
+주문 접수 시작 orderId=ORD-1c0cea8c userId=u21 productId=TV-1 quantity=1
+재고 확인 요청 productId=TV-1 quantity=1
+주문 접수 시작 orderId=ORD-8316a756 userId=u25 productId=TV-0 quantity=1
+재고 확인 요청 productId=TV-0 quantity=1
+주문 접수 시작 orderId=ORD-45f7e506 userId=u35 productId=TV-0 quantity=1
+재고 확인 요청 productId=TV-0 quantity=1
+주문 접수 시작 orderId=ORD-75aa0e4c userId=u28 productId=TV-3 quantity=1
 재고 확인 요청 productId=TV-3 quantity=1
 ```
 
@@ -42,12 +55,15 @@ done; wait
 표준 출력은 그 스레드들이 공유하는 하나의 스트림이기 때문이다.
 "위아래로 붙어 있으니 같은 요청일 것"이라는 가정은 성립하지 않는다.
 
+이 열 줄 안에 `TV-0` 주문이 세 건(u20, u25, u35) 들어 있고,
+그 셋이 남긴 재고 확인 줄은 서로 구별되지 않는다. 관찰 3 에서 다룬다.
+
 ## 관찰 2 — `orderId` 로 검색하면 네 줄 중 두 줄만 나온다
 
 ```bash
-$ grep ORD-1662fe4e console.txt
-주문 접수 시작 orderId=ORD-1662fe4e userId=u43 productId=TV-43 quantity=1
-주문 접수 완료 orderId=ORD-1662fe4e
+$ grep ORD-fd336464 console.txt
+주문 접수 시작 orderId=ORD-fd336464 userId=u43 productId=TV-3 quantity=1
+주문 거절 orderId=ORD-fd336464 reason=OUT_OF_STOCK
 ```
 
 재고 확인 두 줄이 빠진다. `InventoryService` 가 `orderId` 를 모르기 때문이다.
@@ -58,10 +74,24 @@ $ grep ORD-1662fe4e console.txt
 
 ## 관찰 3 — 남은 두 줄은 검색 횟수를 늘려도 회수할 수 없다
 
-`productId` 로 다시 검색하는 방법을 생각할 수 있다. 그러나 관찰 1의 출력을 다시 보면,
-`재고 확인 요청 productId=TV-5 quantity=1` 이라는 줄은 **같은 상품·수량을 주문한 다른 요청과 글자까지 동일하다.**
+`productId` 로 다시 검색하는 방법을 생각할 수 있다. 그러나 그 줄은 **같은 상품·수량을 주문한
+다른 요청이 남긴 줄과 글자까지 동일하다.** 동일한 줄이 몇 개나 되는지 세어보면 이렇다.
 
-동일한 문자열이 여러 요청에서 생성되는 이상, 그중 어느 것이 내가 찾는 요청의 것인지 판별할 근거가 로그 안에 없다.
+```bash
+$ grep '재고 확인 요청' console.txt | sort | uniq -c | sort -rn
+  20 재고 확인 요청 productId=TV-4 quantity=1
+  20 재고 확인 요청 productId=TV-3 quantity=1
+  20 재고 확인 요청 productId=TV-2 quantity=1
+  20 재고 확인 요청 productId=TV-1 quantity=1
+  20 재고 확인 요청 productId=TV-0 quantity=1
+```
+
+`ORD-fd336464`(`TV-3`)의 재고 확인 줄은 저 20줄 중 하나다. 그런데 그 20줄은 서로 완전히 같다.
+어느 것이 이 주문의 것인지 판별할 근거가 로그 안에 없다.
+
+시각으로 좁히는 방법도 통하지 않는다. 이 커밋의 출력에는 타임스탬프조차 없고,
+설령 있더라도 동시 요청은 같은 밀리초에 겹친다.
+
 검색 방법의 문제가 아니라 정보의 문제다. **로그에 없는 정보는 검색으로 만들어낼 수 없다.**
 
 ## 진단 결과

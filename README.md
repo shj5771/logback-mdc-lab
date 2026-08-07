@@ -69,36 +69,51 @@ SPRING_PROFILES_ACTIVE=dev ./gradlew bootRun    # 터미널 1
 | 복원에 필요한 검색 횟수 | **복원 불가** | **1회** | **1회** |
 | 비동기 구간 추적 성공률 | **0%** | **100%** (67 / 67) | **100%** (71 / 71) |
 | 검색 가능 필드 수 | **0개** | **22개** (기본 7 + 직접 15) | **21개** (기본 7 + 직접 14) |
-| 민감정보 노출 | **101줄** | **0줄** | **0줄** |
+| 민감정보 노출 | **178줄** | **0줄** | **0줄** |
 | 로그 유실 (콘솔 대비) | — | **0줄** | **0줄** |
 | 요청 처리 중 traceId 없이 남은 줄 | 전부 | **0줄** | **0줄** |
 
 측정 방법, dev/prod 줄 수가 다른 이유, 필드 출처별 내역은 [06-measurement](./docs/06-measurement.md) 에 있다.
 
+> 민감정보 행만 Before 기준이 다르다. `9a8fefe` 는 카드번호를 로그에 찍는 코드 자체가 없어
+> 노출이 0줄이고, 그 0 은 마스킹이 막아낸 결과가 아니다. 그래서 이 지표는
+> **현재 코드에서 마스킹 세 겹을 걷어낸 상태**를 Before 로 삼았다 — [근거와 절차](./docs/06-measurement.md#민감정보만-before-기준이-다른-이유).
+
 ### 검색 한 번으로 복원한 흐름
+
+조건은 `traceId` 하나뿐이다.
 
 ```bash
 jq 'select(.traceId=="30c7ca5e25cc47e792a14405ba2a3f1a")' samples/dev-run.log
 ```
 
-```
-14:18:21.597  http-nio-8080-exec-16  OrderController       주문 요청 수신 OrderRequest[userId=u18, ..., cardNumber=****-3456]
-14:18:21.598  http-nio-8080-exec-16  OrderService          주문 접수 시작 userId=u18 productId=TV-18 quantity=1
-14:18:21.599  http-nio-8080-exec-16  InventoryService      재고 확인 요청 productId=TV-18 quantity=1
-14:18:21.669  http-nio-8080-exec-16  InventoryService      재고 확인 응답 productId=TV-18 enough=true
-14:18:21.669  http-nio-8080-exec-16  PaymentService        결제 승인 요청 amount=10000
-14:18:21.669  http-nio-8080-exec-16  PaymentService        PG 요청 페이로드 cardNumber=****-****-****-****
-14:18:21.746  http-nio-8080-exec-16  PaymentService        결제 승인 완료 paymentStatus=APPROVED amount=10000
-14:18:21.746  http-nio-8080-exec-16  OrderService          주문 접수 완료 status=RECEIVED
-14:18:21.746  task-3                 NotificationService   주문 확인 알림 발송
+이대로 실행하면 JSON 9건이 그대로 나온다. 흐름을 눈으로 따라가려고 네 필드만 뽑으면 이렇다.
+
+```bash
+jq -r 'select(.traceId=="30c7ca5e25cc47e792a14405ba2a3f1a")
+       | "\(.["@timestamp"][11:23])  \(.thread_name)  \(.logger_name | split(".") | last)  \(.message)"' \
+   samples/dev-run.log
 ```
 
-811줄이 뒤섞인 파일에서 이 9줄만 나온다.
+```
+14:18:21.597  http-nio-8080-exec-16  OrderController  주문 요청 수신 OrderRequest[userId=u18, productId=TV-18, quantity=1, cardNumber=****-3456]
+14:18:21.598  http-nio-8080-exec-16  OrderService  주문 접수 시작 userId=u18 productId=TV-18 quantity=1
+14:18:21.599  http-nio-8080-exec-16  InventoryService  재고 확인 요청 productId=TV-18 quantity=1
+14:18:21.669  http-nio-8080-exec-16  InventoryService  재고 확인 응답 productId=TV-18 enough=true
+14:18:21.669  http-nio-8080-exec-16  PaymentService  결제 승인 요청 amount=10000
+14:18:21.669  http-nio-8080-exec-16  PaymentService  PG 요청 페이로드 cardNumber=****-****-****-****
+14:18:21.746  http-nio-8080-exec-16  PaymentService  결제 승인 완료 paymentStatus=APPROVED amount=10000
+14:18:21.746  http-nio-8080-exec-16  OrderService  주문 접수 완료 status=RECEIVED
+14:18:21.746  task-3  NotificationService  주문 확인 알림 발송
+```
+
+여러 요청이 뒤섞인 파일에서 이 9줄만 나온다.
 마지막 줄에서 스레드가 `exec-16` → `task-3` 로 바뀌지만 traceId 는 끊기지 않는다.
 
 > 실행 로그 원본을 [`samples/dev-run.log`](./samples/dev-run.log) 에 커밋해뒀다(마스킹 적용 상태).
 > 위 명령은 앱을 띄우지 않고 그 파일에 그대로 실행해 볼 수 있다.
-> 전체 811줄 중 결과 유형별로 요청을 통째로 골라낸 303줄이다 — 요청이 중간에 잘리지 않게 했다.
+> 측정에 쓴 전체 실행은 811줄이고, 그중 결과 유형별로 요청을 통째로 골라낸 303줄이다 —
+> 요청이 중간에 잘리지 않게 했다.
 
 ## 설계 결정
 
