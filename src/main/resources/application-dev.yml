@@ -1,0 +1,11 @@
+# 팀 공용 개발 서버: 콘솔에 더해 파일로도 남긴다. 보관은 3일이면 충분.
+app:
+  logging:
+    env: dev
+    max-history: 3
+    total-size-cap: 1GB
+
+logging:
+  level:
+    root: INFO
+    com.example.logbackmdclab: DEBUG

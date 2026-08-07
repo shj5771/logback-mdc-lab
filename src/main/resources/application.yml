@@ -1,6 +1,48 @@
 spring:
   application:
     name: logback-mdc-lab
+  profiles:
+    # 프로파일을 주지 않은 실행은 "어느 환경도 아닌 네 번째 상태"가 된다.
+    # 그 상태에서만 나는 버그를 만들지 않기 위해 기본값을 못 박는다.
+    default: local
 
 server:
   port: 8080
+
+# 로깅 설정의 소유권을 나눈다.
+#   application*.yml  — 레벨(무엇을 남길지), 파일 보관 정책 값
+#   logback-spring.xml — appender/encoder 구조(어디에 어떤 모양으로 쓸지)
+# 레벨을 yml 이 소유하는 이유는 Spring Boot 가 logback 설정을 읽은 "뒤에"
+# logging.level.* 을 적용하기 때문이다. 두 곳에 적으면 항상 yml 이 이긴다.
+app:
+  logging:
+    env: local
+    file: logs/order-app.log
+    max-file-size: 100MB
+    max-history: 3
+    total-size-cap: 1GB
+    # 비동기 파일 쓰기의 유실 방지 값. 네 개 모두 Logback 기본값과 다르며,
+    # 왜 다른지는 docs/04-async-appender-loss.md 에 실측과 함께 적었다.
+    # 여기 두는 이유는 유실을 재현해 보기 위해서다 —
+    #   ./gradlew bootRun --args='--spring.profiles.active=dev \
+    #     --app.logging.async.queue-size=16 --app.logging.async.discarding-threshold=3 \
+    #     --app.logging.async.never-block=true'
+    async:
+      queue-size: 2048
+      discarding-threshold: 0
+      never-block: false
+      max-flush-time: 5000
+
+logging:
+  level:
+    root: INFO
+    com.example.logbackmdclab: INFO
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,loggers
+  endpoint:
+    loggers:
+      access: unrestricted
