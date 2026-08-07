@@ -7,14 +7,14 @@
 
 ## 배경
 
-주문 요청 하나는 내부적으로 4개의 계층을 거친다.
+주문 요청 하나는 내부적으로 네 개의 계층을 거친다.
 
 ```
 POST /orders
   │
   ├─ 1. 주문 접수      OrderService
   ├─ 2. 재고 확인      InventoryService
-  ├─ 3. 결제 승인      PaymentService  ──▶ 외부 PG (지연 + 간헐적 실패)
+  ├─ 3. 결제 승인      PaymentService  ──▶ 외부 PG (지연 + 확률적 거절)
   └─ 4. 알림 발송      NotificationService   @Async (별도 스레드)
 ```
 
@@ -24,7 +24,7 @@ POST /orders
 
 로그를 열어 이 요청 하나의 처리 흐름을 복원해야 한다. 그런데 복원할 수가 없다.
 
-> 이 문의는 가정한 상황이다. 다만 아래 문제들은 가정이 아니라, 동시 요청을 발생시키면 로컬에서 그대로 재현되는 현상이다.
+> 문의는 가정한 상황이다. 다만 아래 문제들은 가정이 아니라, 동시 요청을 발생시키면 그대로 재현되는 현상이다.
 
 ## 문제
 
@@ -35,127 +35,167 @@ POST /orders
 | 3 | 알림 발송 로그는 흐름에서 완전히 이탈한다 | `@Async` 라 다른 스레드에서 실행된다 |
 | 4 | 환경별로 로그 정책을 다르게 가져갈 수 없다 | 설정이 코드에 고정되어 있다 |
 | 5 | 로그를 조건으로 검색할 수 없다 | 평문 문자열이라 필드 단위 조회가 불가능하다 |
+| 6 | 실패한 요청은 고객이 건넬 검색 키조차 없다 | 식별자가 서버 밖으로 나가지 않는다 |
 
 핵심은 2번이다. 모든 로그에 개발자가 식별자를 직접 넣어주지 않으면 요청 하나의 흐름이 끊긴다.
 그리고 계층이 늘어날수록 그 방식은 유지되지 않는다.
 
 ## 접근
 
-| 단계 | 과제 | 대응하는 문제 | 상태 |
-|:---:|---|:---:|:---:|
-| 1 | 현행 로깅의 한계 진단 및 Before 실측 | 1, 2 | 완료 |
-| 2 | SLF4J / Logback 기반 로깅 체계 도입 | 4 | 완료 |
-| 3 | `logback-spring.xml` 환경별 설정 분리 (local / dev / prod) | 4 | 완료 |
-| 4 | MDC 기반 `traceId` 발급 및 계층 간 전파 | 1, 2 | 완료 |
-| 5 | 비동기 구간의 `traceId` 유실 해결 | 3 | 완료 |
-| 6 | JSON 구조화 로그 전환 및 민감정보 마스킹 | 5 | 완료 |
-| 7 | After 실측 및 결과 정리 | 전체 | 완료 |
+| 단계 | 과제 | 대응 | 기록 |
+|:---:|---|:---:|---|
+| 1 | 현행 로깅의 한계 진단 및 Before 실측 | 1, 2 | [01-diagnosis](./docs/01-diagnosis.md) |
+| 2 | SLF4J / Logback 기반 로깅 체계 도입 | 4 | — |
+| 3 | 환경별 설정 분리 (local / dev / prod) | 4 | [02-profile-split](./docs/02-profile-split.md) |
+| 4 | MDC 기반 `traceId` 발급 및 계층 간 전파 | 1, 2 | [03-mdc-propagation](./docs/03-mdc-propagation.md) |
+| 5 | 비동기 구간의 `traceId` 유실 해결 | 3 | [03-mdc-propagation](./docs/03-mdc-propagation.md) |
+| 6 | 비동기 파일 쓰기의 로그 유실 방지 | — | [04-async-appender-loss](./docs/04-async-appender-loss.md) |
+| 7 | JSON 구조화 로그 전환 및 민감정보 마스킹 | 5 | [05-masking](./docs/05-masking.md) |
+| 8 | 실패 경로 추적 — 예외 응답에 `traceId` 노출 | 6 | [03-mdc-propagation](./docs/03-mdc-propagation.md) |
+| 9 | After 실측 및 결과 정리 | 전체 | [06-measurement](./docs/06-measurement.md) |
 
 ## 측정
 
-로그 개선의 효과는 체감이 아니라 수치로 확인한다.
-Before / After 모두 **동시 100건** 부하를 건 뒤 같은 방식으로 측정했다.
-
-| 지표 | 측정 방법 | Before | After |
-|---|---|---|---|
-| 요청 흐름 복원율 | 특정 요청 한 건의 로그 중 검색으로 회수한 줄의 비율 | **2 / 4줄 (50%)** | **6 / 6줄 (100%)** |
-| 복원에 필요한 검색 횟수 | 위 작업에 사용한 grep / 검색 명령 수 | **복원 불가** (아래 참고) | **1회** |
-| 비동기 구간 추적 성공률 | 알림 발송 로그(`@Async`) 중 `traceId` 가 남은 비율 | **0%** | **100%** (77 / 77줄) |
-| 검색 가능 필드 수 | 구조화 로그에서 필드로 조회 가능한 키 개수 | **0개** | **12개** |
-| 민감정보 노출 | 카드번호가 평문으로 남는 로그 줄 수 | **101줄** (콘솔·파일 모두) | **0줄** |
-
-### 복원 불가의 의미
-
-Before 에서 `orderId` 로 검색하면 4줄 중 2줄만 나온다. `InventoryService` 가 `orderId` 를 모르기 때문이다.
-남은 2줄은 검색 횟수를 늘려도 회수할 수 없다.
-
-```
-주문 접수 시작 orderId=ORD-c93119e8 userId=u5 productId=TV-5 quantity=1
-재고 확인 요청 productId=TV-5 quantity=1     ← u5 의 것
-주문 접수 시작 orderId=ORD-4ee9f779 userId=u3 productId=TV-3 quantity=1
-재고 확인 요청 productId=TV-3 quantity=1     ← u3 의 것
-```
-
-`productId` 로 좁혀도 마찬가지다. 같은 상품·수량 요청이 둘 이상이면 재고 로그는 글자까지 동일해
-어느 주문의 것인지 판별할 근거가 로그 안에 없다. 검색 횟수의 문제가 아니라 정보의 문제다.
-
-### After — 검색 한 번으로 복원한 흐름
+동시 100건 + 잘못된 JSON 1건. 전 과정을 [`scripts/`](./scripts) 로 재현할 수 있다.
 
 ```bash
-jq 'select(.traceId=="1cfd2f5a")' logs/order-app.log
+SPRING_PROFILES_ACTIVE=dev ./gradlew bootRun    # 터미널 1
+./scripts/load.sh 100 && ./scripts/measure.sh   # 터미널 2
+```
+
+| 지표 | Before | After (dev) | After (prod) |
+|---|---|---|---|
+| 요청 흐름 복원율 | **2 / 4줄 (50%)** | **9 / 9줄 (100%)** | **7 / 7줄 (100%)** |
+| 복원에 필요한 검색 횟수 | **복원 불가** | **1회** | **1회** |
+| 비동기 구간 추적 성공률 | **0%** | **100%** (67 / 67) | **100%** (71 / 71) |
+| 검색 가능 필드 수 | **0개** | **22개** (기본 7 + 직접 15) | **21개** (기본 7 + 직접 14) |
+| 민감정보 노출 | **101줄** | **0줄** | **0줄** |
+| 로그 유실 (콘솔 대비) | — | **0줄** | **0줄** |
+| 요청 처리 중 traceId 없이 남은 줄 | 전부 | **0줄** | **0줄** |
+
+측정 방법, dev/prod 줄 수가 다른 이유, 필드 출처별 내역은 [06-measurement](./docs/06-measurement.md) 에 있다.
+
+### 검색 한 번으로 복원한 흐름
+
+```bash
+jq 'select(.traceId=="30c7ca5e25cc47e792a14405ba2a3f1a")' samples/dev-run.log
 ```
 
 ```
-13:11:39.997  exec-40  OrderController      주문 요청 수신 ... cardNumber=****-3456
-13:11:39.997  exec-40  OrderController      주문 접수 시작 orderId=ORD-896a235a userId=u43
-13:11:39.997  exec-40  InventoryService     재고 확인 요청 productId=TV-43 quantity=1
-13:11:40.047  exec-40  InventoryService     재고 확인 응답 productId=TV-43 enough=true
-13:11:40.048  task-1   NotificationService  주문 확인 알림 발송 orderId=ORD-896a235a
-13:11:40.048  exec-40  OrderController      주문 접수 완료 orderId=ORD-896a235a
+14:18:21.597  http-nio-8080-exec-16  OrderController       주문 요청 수신 OrderRequest[userId=u18, ..., cardNumber=****-3456]
+14:18:21.598  http-nio-8080-exec-16  OrderService          주문 접수 시작 userId=u18 productId=TV-18 quantity=1
+14:18:21.599  http-nio-8080-exec-16  InventoryService      재고 확인 요청 productId=TV-18 quantity=1
+14:18:21.669  http-nio-8080-exec-16  InventoryService      재고 확인 응답 productId=TV-18 enough=true
+14:18:21.669  http-nio-8080-exec-16  PaymentService        결제 승인 요청 amount=10000
+14:18:21.669  http-nio-8080-exec-16  PaymentService        PG 요청 페이로드 cardNumber=****-****-****-****
+14:18:21.746  http-nio-8080-exec-16  PaymentService        결제 승인 완료 paymentStatus=APPROVED amount=10000
+14:18:21.746  http-nio-8080-exec-16  OrderService          주문 접수 완료 status=RECEIVED
+14:18:21.746  task-3                 NotificationService   주문 확인 알림 발송
 ```
 
-599줄이 뒤섞인 파일에서 이 6줄만 나온다. 5번째 줄에서 스레드가 `exec-40` → `task-1` 로 바뀌지만
-`traceId` 는 끊기지 않는다. `TaskDecorator` 로 MDC 를 전파했기 때문이다.
+811줄이 뒤섞인 파일에서 이 9줄만 나온다.
+마지막 줄에서 스레드가 `exec-16` → `task-3` 로 바뀌지만 traceId 는 끊기지 않는다.
 
-> Before 측정은 각 상태의 커밋을 `git worktree` 로 따로 꺼내 실행했다.
-> 흐름 복원은 `9a8fefe`(println 단계), 민감정보는 마스킹 도입 직전 상태를 기준으로 했다.
+> 실행 로그 원본을 [`samples/dev-run.log`](./samples/dev-run.log) 에 커밋해뒀다(마스킹 적용 상태).
+> 위 명령은 앱을 띄우지 않고 그 파일에 그대로 실행해 볼 수 있다.
+> 전체 811줄 중 결과 유형별로 요청을 통째로 골라낸 303줄이다 — 요청이 중간에 잘리지 않게 했다.
 
 ## 설계 결정
 
 측정 지표로는 드러나지 않지만, 직접 재현해 확인한 뒤 내린 판단들이다.
+각 항목의 실측과 근거는 링크된 문서에 있다.
 
-### AsyncAppender 는 기본 설정만으로도 로그를 버린다
+**[MDC 스코프는 계층이 아니라 요청 경계가 소유한다](./docs/03-mdc-propagation.md#스코프는-누가-여나)**
+계층마다 자기 키를 지우게 하면, 예외로 빠져나가는 경로에서 실패 로그가 찍히기 **전에** `orderId` 가 사라진다.
+정작 필요한 순간에 식별자가 없다.
 
-파일 쓰기는 디스크 I/O 라 요청 스레드를 붙잡는다. `AsyncAppender` 로 큐에 넘기면 해결되지만,
-이 appender 는 큐가 차면 로그를 **말없이 버린다**. 동시 100건으로 확인한 결과는 다음과 같다.
+**[`@Async` 전파를 자동설정 관례에 맡기지 않는다](./docs/03-mdc-propagation.md#배선을-명시하는-이유)**
+Boot 는 `TaskDecorator` 빈을 `getIfUnique()` 로 주워간다. 빈이 하나 더 생기면 `null` 이 되어
+전파가 통째로 빠지는데 예외도 경고도 없다. 실행기를 직접 정의하고 데코레이터를 직접 건다.
 
-| 설정 | 콘솔 | 파일 | 유실 |
-|---|---|---|---|
-| `queueSize=16`, `neverBlock=true` | 101줄 | **51줄** | **50줄** |
-| `queueSize=2048`, `discardingThreshold=0`, `neverBlock=false` | 101줄 | 101줄 | 0줄 |
+**[`traceId` 는 32 hex — 읽기 편함보다 전제를 지킨다](./docs/03-mdc-propagation.md#traceid-는-어디서-오나)**
+UUID 앞 8자(32비트)는 콘솔에서 읽기 편하지만 30일 보관 규모에서 충돌쌍이 생긴다.
+그러면 "traceId 하나로 요청 하나를 복원한다"는 전제 자체가 흔들린다.
+32 hex 는 W3C trace-context 및 Boot `CorrelationIdFormatter` 규약과 같은 폭이다.
 
-예외도 경고도 발생하지 않았고 응답은 정상이었다. 콘솔에는 전부 보이므로 개발 중에는 드러나지 않는다.
+**[필터는 ERROR 디스패치까지 덮어야 한다](./docs/03-mdc-propagation.md#필터는-왜-onceperrequestfilter-인가)**
+`Filter` 를 직접 구현하면 REQUEST 디스패치에만 매핑되어, 500 을 만드는 로그가 전부 `NO_TRACE` 로 빠진다.
+장애 분석용 로깅인데 정작 장애 순간만 추적이 끊긴다.
 
-유실의 원인은 둘인데, 더 위험한 쪽은 명시하지 않은 **기본값**이다.
-`discardingThreshold` 의 기본값은 `queueSize / 5` 이고, 큐 여유가 그 아래로 떨어지면
-WARN 미만(INFO · DEBUG) 이벤트를 버린다. 위에서 사라진 재고 확인 로그가 DEBUG 라 여기에 해당했다.
+**[AsyncAppender 는 기본 설정만으로도 로그를 버린다](./docs/04-async-appender-loss.md)**
+동시 100건에서 134줄이 사라졌다. 예외도 경고도 없었고 응답은 정상이었다.
+사라진 것은 전부 WARN **미만**이다 — 장애 분석에 필요한 건 WARN 한 줄이 아니라 그 앞의 맥락인데.
 
-`neverBlock=false` 는 큐가 가득 찰 때 버리는 대신 대기하겠다는 선택이다.
-로그 유실보다 응답 지연이 낫다고 판단했으나, 유실이 허용되는 로그라면 반대가 맞다.
-정답이 아니라 트레이드오프다.
+**[마스킹 정규식이 두 개인 이유](./docs/05-masking.md#정규식이-두-개인-이유)**
+파일 쪽 값 마스킹은 JSON 의 모든 문자열 값에 걸린다. 넓은 정규식을 쓰면
+숫자가 길게 이어진 `traceId` 의 그 구간이 통째로 가려진다 — 핵심 지표를 설정으로 스스로 깨는 셈이다.
+경계를 숫자가 아니라 hex 로 잡아 해결했다.
 
-### 마스킹은 찍는 쪽과 나가는 쪽 양쪽에 건다
+**[콘솔 마스킹에는 커스텀 컨버터가 필요하다](./docs/05-masking.md#콘솔은-왜-커스텀-컨버터인가)**
+`%replace(%msg)` 는 스택트레이스를 덮지 못하고, `%replace(%msg%n%ex)` 는 스택트레이스를 두 번 찍는다.
+`ThrowableHandlingConverter` 를 직접 상속해야 한다.
 
-`OrderRequest.toString()` 을 재정의해 객체 자체가 카드번호를 노출하지 않게 하고,
-JSON encoder 에 `MaskingJsonGeneratorDecorator` 를 걸어 출력 직전에 한 번 더 막는다.
+**[레벨은 yml 이, 구조는 XML 이 소유한다](./docs/02-profile-split.md#소유권)**
+Boot 는 logback 설정을 읽은 뒤에 `logging.level.*` 을 적용한다. 두 곳에 적으면 항상 yml 이 이기고,
+XML 쪽은 죽은 코드가 된다. 그래서 `<springProfile>` 블록이 하나뿐이고 마스킹 설정도 한 벌만 존재한다.
 
-한 겹만으로는 부족하다. encoder 쪽만 걸었을 때 파일에는 남지 않았지만
-**콘솔에는 평문이 그대로 출력됐다.** 콘솔은 텍스트 encoder 라 그 decorator 를 거치지 않기 때문이다.
+**[판단 근거가 되는 줄만 INFO 로 올린다](./docs/06-measurement.md#복원율이-dev-와-prod-에서-모두-100-인-이유)**
+`재고 확인 응답`은 분기를 결정하므로 INFO, `재고 확인 요청`은 DEBUG.
+그래서 prod 에서도 줄 수는 줄지만(9 → 7) 흐름 복원은 100% 를 유지한다.
 
-### 콘솔은 텍스트, 파일만 JSON 으로 둔다
+**[Boot 내장 구조화 로깅 · Micrometer Tracing 을 쓰지 않은 이유](./docs/03-mdc-propagation.md#다음-단계--micrometer-tracing-으로-가면)**
+Boot 3.4+ 는 `logging.structured.format.file=logstash` 한 줄로 같은 JSON 을 만든다.
+그럼에도 `logstash-logback-encoder` 를 직접 쓴 건 encoder / appender / decorator 의 관계와
+마스킹 지점을 손으로 다뤄보는 것이 이 랩의 목적이기 때문이다.
+분산 추적은 범위 밖이며, 그쪽으로 가면 이 코드는 확장되는 게 아니라 **대체된다** — 알고 좁혔다.
 
-`appender` 는 어디에 쓸지, `encoder` 는 어떤 모양으로 쓸지를 정한다. 둘은 분리되어 있다.
-콘솔은 사람이 눈으로 읽으므로 모든 환경에서 텍스트 패턴을 유지하고,
-수집기가 읽는 파일에만 `LogstashEncoder` 를 적용했다.
+## 구조
 
-JSON 로그 파일은 한 줄이라도 JSON 이 아니면 파싱이 통째로 깨진다.
-이 프로젝트에서도 파일 앞부분의 스프링 배너 때문에 `jq` 가 실패했고, `grep '^{'` 로 걸러야 했다.
+```
+src/main/java/com/example/logbackmdclab/
+├── common/                          횡단 관심사
+│   ├── TraceIdFilter                요청 경계에서 traceId 발급·계승·응답 노출
+│   ├── MdcScope                     MDC 생명주기를 try-with-resources 로 묶는다
+│   ├── LoggingConfig                필터 등록 (순서·디스패치 타입 명시)
+│   ├── AsyncConfig                  @Async 실행기 + MDC TaskDecorator 명시 배선
+│   ├── MaskingMessageConverter      콘솔 메시지·스택트레이스 마스킹
+│   ├── GlobalExceptionHandler       실패를 로그와 응답 양쪽에 남긴다
+│   └── ErrorResponse                실패 응답에 traceId 를 실어 보낸다
+└── order/                           도메인
+    ├── OrderController              HTTP 만
+    ├── OrderService                 흐름만 (orderId 채번 · 오케스트레이션)
+    ├── InventoryService
+    ├── PaymentService               지연 + 확률적 거절
+    ├── NotificationService          @Async — 인자가 없다는 것이 결론이다
+    ├── OrderRequest / OrderResponse
+    └── PaymentDeclinedException
+```
 
-### `logback.xml` 에서 `<springProfile>` 이 무시된다는 설명은 사실과 다르다
+## 테스트
 
-파일명을 `logback.xml` 로 두어도 프로파일 분리는 **정상 동작한다**(Spring Boot 3.5.0 / Logback 1.5.18 기준).
-설정 파일이 두 번 읽히기 때문이다. Logback 이 먼저 자체 파서로 읽으면서
-`Ignoring unknown property [springProfile]` 경고를 남기고, 이어서 Spring Boot 가
-`SpringBootJoranConfigurator` 로 다시 읽으며 프로파일을 적용한다.
+```bash
+./gradlew test      # 53개
+```
 
-관측되는 차이는 동작 여부가 아니라 **기동 시 경고 3줄**이다.
-`logback-spring.xml` 을 쓰면 Logback 이 그 이름을 찾지 않으므로 첫 번째 패스 자체가 없고 경고도 사라진다.
+로그가 산출물인 프로젝트라 "로그가 이렇게 찍혔다"를 단언할 수단이 필요하다.
+Logback 의 `ListAppender` 로 실제 이벤트를 잡아 검증한다.
 
-### 프로파일 블록 안에 `appender-ref` 만 두면 안 된다
+| 대상 | 무엇을 고정하나 |
+|---|---|
+| `MdcTaskDecoratorTest` | MDC 복사·복구·예외 경로. Spring 컨텍스트 불필요 |
+| `AsyncTracePropagationTest` | 스레드가 바뀌어도 traceId 가 이어지는지 + 데코레이터가 실행기에 실제로 걸렸는지 |
+| `TraceIdFilterTest` | 발급·계승·응답 헤더·요청 후 정리·로그 인젝션 차단 |
+| `TraceIdFilterRegistrationTest` | 필터 순서와 디스패치 타입 |
+| `LogbackProfileConfigTest` | 프로파일별 appender·레벨·유실 방지 4개 값·롤링 상한 |
+| `MaskingTest` | 콘솔/파일 양쪽 마스킹, 스택트레이스 1회 출력, traceId 훼손 없음 |
+| `OrderRequestMaskingTest` | 마스킹 불변식 — 원문이 절대 나오지 않는다 |
+| `OrderFlowTest` | 승인·재고 거절·결제 거절 세 갈래의 로그와 응답 |
 
-환경별 설정을 나눌 때 `<root>` 의 `appender-ref` 를 각 `<springProfile>` 안에만 두었더니,
-프로파일을 지정하지 않고 실행했을 때 **로그가 한 줄도 출력되지 않았다.**
-공통 `root` 와 콘솔 appender 는 프로파일 밖에 두고, 프로파일 블록에는 환경별로 달라지는 것만 적는다.
+> 모든 `@SpringBootTest` 에 `@DirtiesContext` 가 붙어 있다.
+> Logback 의 `LoggerContext` 는 JVM 전역이고 `LogbackLoggingSystem.initialize()` 는
+> `if (isAlreadyInitialized(loggerContext)) return;` 으로 시작한다.
+> 앞 클래스의 컨텍스트가 캐시에 남아 있으면 다음 클래스는 프로파일을 바꿔도
+> `logback-spring.xml` 을 다시 읽지 못한다. 사유는 `LogbackProfileConfigTest` javadoc 에 적었다.
 
 ## 기술 스택
 
@@ -165,6 +205,7 @@ JSON 로그 파일은 한 줄이라도 JSON 이 아니면 파싱이 통째로 �
 | Spring Boot | 3.5.0 |
 | SLF4J | 2.0.17 |
 | Logback | 1.5.18 |
+| logstash-logback-encoder | 8.0 |
 | Gradle | 8.14 (Wrapper) |
 
 Logback 은 직접 추가한 의존성이 아니다.
@@ -175,15 +216,21 @@ Logback 은 직접 추가한 의존성이 아니다.
 ## 실행
 
 ```bash
-./gradlew bootRun
+./gradlew bootRun                                  # local — 콘솔만, 앱 로거 DEBUG
+SPRING_PROFILES_ACTIVE=dev  ./gradlew bootRun      # dev  — 콘솔 + JSON 파일, 3일 보관
+SPRING_PROFILES_ACTIVE=prod ./gradlew bootRun      # prod — 앱 INFO / 프레임워크 WARN, 30일 보관
 ```
 
-기본 포트는 `8080` 이다. 프로파일을 지정해 실행하려면 다음과 같이 한다.
+기본 포트는 `8080`. `logs/order-app.log` 는 **dev / prod 에서만** 생성된다.
 
 ```bash
-./gradlew bootRun --args='--spring.profiles.active=local'
+# 주문
+curl -i -X POST localhost:8080/orders -H 'Content-Type: application/json' \
+  -d '{"userId":"u1","productId":"TV-1","quantity":1,"cardNumber":"1234-5678-9012-3456"}'
+
+# 운영 중 레벨 변경 (재배포 없이)
+curl -X POST localhost:8080/actuator/loggers/com.example.logbackmdclab.order \
+  -H 'Content-Type: application/json' -d '{"configuredLevel":"DEBUG"}'
 ```
 
-## 설계 기록
-
-각 단계에서 왜 그 설정을 선택했는지, 그리고 어떤 것이 예상과 다르게 동작했는지는 [`docs/`](./docs) 에 남긴다.
+> actuator 엔드포인트는 학습 편의를 위해 열어두었다. 실제 운영이라면 인증·네트워크 제한이 함께 가야 한다.
