@@ -22,7 +22,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * XML 은 컴파일러가 보지 않는다. 오타 하나로 {@code discardingThreshold} 가 기본값으로 돌아가면
  * 큐가 찰 때 INFO 로그가 조용히 사라지는데, 그 사실을 알려주는 신호가 어디에도 없다.
- * README 가 "동시 100건에서 50줄이 사라졌다" 로 논증한 그 설정값들을 여기서 고정한다.
+ * README 가 "동시 100건에서 134줄이 사라졌다" 로 논증한 그 설정값들을 여기서 고정한다.
  *
  * <p><b>왜 모든 {@code @SpringBootTest} 에 {@code @DirtiesContext} 가 붙어 있는가.</b>
  * Logback 의 {@code LoggerContext} 는 JVM 전역이고, {@code LogbackLoggingSystem.initialize()} 는

@@ -30,7 +30,7 @@
     <!--
       마스킹 정규식이 둘인 이유는 적용 대상이 다르기 때문이다.
 
-      콘솔(BROAD)  — %replace 가 %msg 에만 걸린다. traceId·orderId 는 %X{} 로 따로 찍혀
+      콘솔(BROAD)  — 컨버터가 메시지와 스택트레이스에만 걸린다. traceId·orderId 는 %X{} 로 따로 찍혀
                      치환 범위 밖이므로, 구분자 없는 16자리까지 넓게 잡아도 안전하다.
       파일(STRICT) — MaskingJsonGeneratorDecorator 의 값 정규식은 JSON 의 "모든 문자열 값"에 걸린다.
                      traceId 는 32 hex 라 (?<!\d)\d{15,16}(?!\d) 같은 정규식을 쓰면

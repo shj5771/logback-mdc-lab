@@ -9,6 +9,7 @@ return "OrderRequest[userId=%s, ..., cardNumber=%s]".formatted(userId, ..., mask
 ```
 
 **나가는 쪽** — 콘솔은 커스텀 컨버터, 파일은 `MaskingJsonGeneratorDecorator`.
+출력 경로가 둘이라 나가는 쪽 통제도 둘이다. 걷어내려면 **세 지점**을 손대야 한다.
 
 한 겹만으로는 부족하다. 찍는 쪽은 설정이 강제하는 통제가 아니라 **코딩 규약**이다.
 누군가 `log.info("card={}", request.cardNumber())` 라고 쓰면 그 겹은 없는 것과 같다.
@@ -62,7 +63,7 @@ log.debug("PG 요청 페이로드 {}", kv("cardNumber", cardNumber));
 
 | | 대상 | 정규식 |
 |---|---|---|
-| 콘솔 (BROAD) | `%msg` 만 | 구분자 유무 무관, 15~16자리까지 |
+| 콘솔 (BROAD) | 메시지 + 스택트레이스 | 구분자 유무 무관, 15~16자리까지 |
 | 파일 (STRICT) | JSON 의 **모든 문자열 값** | 구분자 있는 형태 + hex 경계로 감싼 15~16자리 |
 
 콘솔은 넓게 잡아도 안전하다. `traceId` 와 `orderId` 는 `%X{}` 로 따로 찍혀 치환 범위 밖이기 때문이다.
@@ -92,7 +93,7 @@ log.debug("PG 요청 페이로드 {}", kv("cardNumber", cardNumber));
 
 ```xml
 <jsonGeneratorDecorator class="net.logstash.logback.mask.MaskingJsonGeneratorDecorator">
-    <defaultMask>****-****-****-****</defaultMask>
+    <defaultMask>${CARD_MASK}</defaultMask>
     <path>cardNumber</path>                         <!-- 필드 단위 -->
     <valueMask>
         <value>${CARD_REGEX_STRICT}</value>         <!-- 값 단위 -->
@@ -109,7 +110,9 @@ log.debug("PG 요청 페이로드 {}", kv("cardNumber", cardNumber));
 
 ## 한계
 
-- 커버 범위는 **13~19자리 카드번호 형식**이다. 주민번호·전화번호·이메일은 대상이 아니다.
+- 커버 범위는 **구분자 없는 15~16자리**와 **4-4-4-4 형식(16자리)** 이다.
+  13·14자리(구형 카드), 17자리 이상, Amex 의 4-6-5 구분자 형식(`3782 822463 10005`)은 잡지 않는다.
+  주민번호·전화번호·이메일도 대상이 아니다.
 - 값 정규식은 넓힐수록 다른 식별자를 훼손한다. 그 트레이드오프가 위 hex 경계의 이유다.
 - 근본적으로 정규식 마스킹은 사후 방어다. 애초에 민감정보를 로그에 넘기지 않는 것이 먼저이고,
   이 설정은 그 규약이 깨졌을 때를 위한 것이다.

@@ -7,15 +7,20 @@
 
 ## 배경
 
-주문 요청 하나는 내부적으로 네 개의 계층을 거친다.
+주문 요청 하나는 내부적으로 네 단계를 거친다.
 
 ```
-POST /orders
-  │
-  ├─ 1. 주문 접수      OrderService
-  ├─ 2. 재고 확인      InventoryService
-  ├─ 3. 결제 승인      PaymentService  ──▶ 외부 PG (지연 + 확률적 거절)
-  └─ 4. 알림 발송      NotificationService   @Async (별도 스레드)
+POST /orders  →  OrderController        HTTP 만
+                      │
+                      ▼
+                  OrderService          흐름 (orderId 채번)
+                      │
+                      ├─ 1. 재고 확인    InventoryService
+                      ├─ 2. 결제 승인    PaymentService  ──▶ 외부 PG (지연 + 확률적 거절)
+                      └─ 3. 알림 발송    NotificationService   @Async (별도 스레드)
+                      │
+                      ▼
+                  4. 응답 / 실패 시 GlobalExceptionHandler
 ```
 
 여기에 다음 문의가 들어온 상황을 가정한다.
@@ -67,17 +72,19 @@ SPRING_PROFILES_ACTIVE=dev ./gradlew bootRun    # 터미널 1
 |---|---|---|---|
 | 요청 흐름 복원율 | **2 / 4줄 (50%)** | **9 / 9줄 (100%)** | **7 / 7줄 (100%)** |
 | 복원에 필요한 검색 횟수 | **복원 불가** | **1회** | **1회** |
-| 비동기 구간 추적 성공률 | **0%** | **100%** (67 / 67) | **100%** (71 / 71) |
+| 비동기 구간 추적 성공률 | **0%** | **100%** (67 / 67) | **100%** (66 / 66) |
 | 검색 가능 필드 수 | **0개** | **22개** (기본 7 + 직접 15) | **21개** (기본 7 + 직접 14) |
-| 민감정보 노출 | **178줄** | **0줄** | **0줄** |
+| 민감정보 노출 | **176줄** | **0줄** | **0줄** |
 | 로그 유실 (콘솔 대비) | — | **0줄** | **0줄** |
-| 요청 처리 중 traceId 없이 남은 줄 | 전부 | **0줄** | **0줄** |
+| 추적 사각지대 (애플리케이션 로거 · 요청 스레드) | 전부 | **0줄** | **0줄** |
 
-측정 방법, dev/prod 줄 수가 다른 이유, 필드 출처별 내역은 [06-measurement](./docs/06-measurement.md) 에 있다.
+dev 와 prod 는 별도 실행이다. 결제 거절이 확률(10%)이라 접수 건수는 실행마다 다르고,
+비율로 표현한 지표(추적 성공률·유실)는 실행과 무관하게 재현된다.
+측정 방법과 필드 출처별 내역은 [06-measurement](./docs/06-measurement.md) 에 있다.
 
 > 민감정보 행만 Before 기준이 다르다. `9a8fefe` 는 카드번호를 로그에 찍는 코드 자체가 없어
 > 노출이 0줄이고, 그 0 은 마스킹이 막아낸 결과가 아니다. 그래서 이 지표는
-> **현재 코드에서 마스킹 세 겹을 걷어낸 상태**를 Before 로 삼았다 — [근거와 절차](./docs/06-measurement.md#민감정보만-before-기준이-다른-이유).
+> **현재 코드에서 마스킹을 세 지점 모두 걷어낸 상태**를 Before 로 삼았다 — [근거와 절차](./docs/06-measurement.md#민감정보만-before-기준이-다른-이유).
 
 ### 검색 한 번으로 복원한 흐름
 
@@ -168,6 +175,7 @@ Boot 3.4+ 는 `logging.structured.format.file=logstash` 한 줄로 같은 JSON �
 
 ```
 src/main/java/com/example/logbackmdclab/
+├── LogbackMdcLabApplication         진입점
 ├── common/                          횡단 관심사
 │   ├── TraceIdFilter                요청 경계에서 traceId 발급·계승·응답 노출
 │   ├── MdcScope                     MDC 생명주기를 try-with-resources 로 묶는다

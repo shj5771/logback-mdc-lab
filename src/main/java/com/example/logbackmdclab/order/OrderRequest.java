@@ -19,7 +19,7 @@ public record OrderRequest(
      * 뒷 4자리는 남긴다 — CS 문의 때 어느 카드인지는 짚을 수 있어야 한다.
      *
      * <p>이건 "찍는 쪽" 한 겹일 뿐이다. 규약을 어기는 코드는 언제든 생기므로
-     * 나가는 쪽(콘솔 {@code %replace}, 파일 {@code MaskingJsonGeneratorDecorator})에도 걸어둔다.
+     * 나가는 쪽(콘솔 {@code MaskingMessageConverter}, 파일 {@code MaskingJsonGeneratorDecorator})에도 걸어둔다.
      */
     @Override
     public String toString() {

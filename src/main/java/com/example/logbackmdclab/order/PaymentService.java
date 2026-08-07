@@ -33,7 +33,7 @@ public class PaymentService {
 
         // [의도적 시연] 마스킹이 "찍는 쪽 규약 + 나가는 쪽 설정" 두 겹이라고 주장하려면,
         // 규약을 어긴 줄이 하나는 있어야 나가는 쪽이 실제로 막는지 증명할 수 있다.
-        // 이 줄은 카드번호 원문을 그대로 넘긴다. 콘솔은 %replace, 파일은 MaskingJsonGeneratorDecorator 가 막는다.
+        // 이 줄은 카드번호 원문을 그대로 넘긴다. 콘솔은 MaskingMessageConverter, 파일은 MaskingJsonGeneratorDecorator 가 막는다.
         // prod 는 이 로거가 INFO 라 아예 찍히지 않는다.
         log.debug("PG 요청 페이로드 {}", kv("cardNumber", cardNumber));
 
