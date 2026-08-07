@@ -8,13 +8,11 @@ build/
 *.ipr
 out/
 
-# D3 이후 생성되는 로그 파일
+# 실행 중 생성되는 로그. 대표 발췌만 samples/ 로 커밋한다.
 logs/
 *.log
 *.log.gz
+!samples/*.log
 
-# 완성본 참고용 (막힐 때만 열어볼 것)
 .reference/
-
-# 블로그 초안 (로컬 전용)
 drafts/
