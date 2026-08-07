@@ -72,7 +72,8 @@ $ grep ORD-1662fe4e console.txt
 | 2 | 계층을 넘어 흐름을 잇기 | 하위 계층이 상위 식별자를 모른다 | 4 | MDC 는 스레드에 붙으므로 파라미터 전달 없이 하위 계층 로그에도 실린다 |
 | 3 | 비동기 구간까지 흐름을 잇기 | `@Async` 는 다른 스레드다 | 5 | `TaskDecorator` 로 호출 스레드의 MDC 를 작업 스레드에 복사 |
 | 4 | 환경별로 다른 로그 정책 적용 | 출력 대상과 레벨이 코드에 고정 | 2, 3 | SLF4J 로 전환 후 `logback-spring.xml` 에서 프로파일별 분리 |
-| 5 | 조건을 걸어 조회·집계 | 평문이라 필드가 없다 | 6 | 파일 출력을 JSON 으로 전환, 주요 값을 MDC · `StructuredArguments` 로 필드화 |
+| 5 | 조건을 걸어 조회·집계 | 평문이라 필드가 없다 | 7 | 파일 출력을 JSON 으로 전환, 주요 값을 MDC · `StructuredArguments` 로 필드화 |
+| 6 | 실패한 요청의 검색 키 확보 | 식별자가 서버 밖으로 나가지 않는다 | 8 | 응답 헤더 `X-Trace-Id` 와 `ErrorResponse.traceId` 로 노출 |
 
 2번이 핵심이다. 1번은 모든 로그에 `orderId` 를 직접 넣으면 우회할 수 있지만,
 그러려면 모든 하위 계층의 메서드 시그니처에 식별자를 흘려보내야 한다.
@@ -80,9 +81,27 @@ $ grep ORD-1662fe4e console.txt
 호출부가 전부 깨지고 계층이 늘어날수록 비용이 커진다.
 
 그리고 이 방식으로는 애초에 해결되지 않는 경우가 있다.
-잘못된 JSON(`{"quantity":"두개"}`)을 보내면 컨트롤러에 도달하기 전에 예외가 발생하고,
-로그는 Spring 내부 클래스인 `DefaultHandlerExceptionResolver` 가 남긴다.
-이 시점에 `orderId` 는 존재하지도 않으며, 남의 코드가 찍는 로그에 파라미터를 추가할 방법도 없다.
+잘못된 JSON(`{"quantity":"두개"}`)을 보내면 컨트롤러에 도달하기 전에 예외가 발생한다.
+이 시점에 `orderId` 는 **존재하지도 않는다.** 채번하는 코드가 아직 실행되지 않았기 때문이다.
+식별자를 파라미터로 흘려보내는 전략은 여기서 원리적으로 막힌다.
 
-MDC 를 도입한 뒤에는 이 줄에도 `traceId` 가 함께 남는다.
-요청 단위 식별자는 애플리케이션 코드가 아니라 요청 경계(Filter)에서 관리해야 한다는 근거다.
+MDC 를 도입한 뒤에는 이 줄에도 `traceId` 가 남는다. 요청 경계(Filter)가 컨트롤러보다 먼저 실행되기 때문이다.
+
+```
+14:26:23.360 WARN [http-nio-8080-exec-1] [0d5b4efc...] GlobalExceptionHandler
+             - 요청 거부 status=REJECTED httpStatus=400 exceptionType=HttpMessageNotReadableException
+```
+
+요청 단위 식별자는 애플리케이션 코드가 아니라 요청 경계에서 관리해야 한다는 근거다.
+
+> 이 줄을 남기는 주체는 이후 단계에서 바뀌었다. 처음에는 Spring 내부의
+> `DefaultHandlerExceptionResolver` 가 찍었고, 8단계에서 `@RestControllerAdvice` 를 추가한 뒤로는
+> 우리 코드(`GlobalExceptionHandler`)가 찍는다. 프레임워크가 찍는 로그에도 traceId 가 실린다는
+> 사실은 그대로다 — `local` 프로파일에서
+> `logging.level.org.springframework.web.servlet.mvc.method.annotation.ExceptionHandlerExceptionResolver=DEBUG`
+> 로 확인할 수 있다.
+
+## 이 문서 이후
+
+여기서 진단한 다섯 가지 문제의 해결 과정과 실측은 [`docs/`](.) 의 나머지 문서에 있다.
+Before / After 수치 전체는 [06-measurement](./06-measurement.md) 에 정리했다.
