@@ -26,16 +26,25 @@ Before 상태는 커밋을 따로 꺼내 실행했다.
 git worktree add --detach /tmp/wt-println 9a8fefe   # System.out.println 단계
 ```
 
-## 요청 구성 (dev / prod 동일)
+## 요청 구성
 
-101건 = 정상 주문 100건 + 잘못된 JSON 1건
+101건 = 정상 주문 100건 + 잘못된 JSON 1건.
+dev 와 prod 는 **별도 실행**이다. 아래 표의 건수가 서로 다른 이유가 있다.
 
-| 결과 | 건수 |
-|---|---:|
-| 접수 (RECEIVED) | 67 |
-| 재고 부족 거절 (OUT_OF_STOCK) | 24 |
-| 결제 거절 (PG_DECLINED) | 9 |
-| 요청 해석 실패 (400) | 1 |
+| 결과 | dev 실행 | prod 실행 | 결정적인가 |
+|---|---:|---:|---|
+| 접수 (RECEIVED) | 67 | 66 | 아니다 (아래 결제 거절에 따라 달라진다) |
+| 재고 부족 거절 (OUT_OF_STOCK) | 24 | 24 | **그렇다** |
+| 결제 거절 (PG_DECLINED) | 9 | 10 | 아니다 — 확률 10% |
+| 요청 해석 실패 (400) | 1 | 1 | 그렇다 |
+
+재고 판정은 `Math.abs(productId.hashCode()) % 4 != 0` 이라 `TV-1`~`TV-100` 에 대해 **항상 24건**이 거절된다.
+반면 결제는 `app.payment.decline-rate-percent`(기본 10) 확률이라 실행할 때마다 다르다.
+그래서 접수 건수도 실행마다 흔들린다 — 이 문서의 절대 건수를 그대로 재현하려 하지 말 것.
+비율로 표현한 지표(추적 성공률 100%, 유실 0줄)는 실행과 무관하게 재현된다.
+
+> 결정적으로 재현하고 싶으면 `app.payment.decline-rate-percent=0` 으로 띄운다.
+> 테스트(`OrderFlowTest`, `AsyncTracePropagationTest`)가 그렇게 한다.
 
 ## 결과
 
@@ -43,12 +52,21 @@ git worktree add --detach /tmp/wt-println 9a8fefe   # System.out.println 단계
 |---|---|---|---|---|
 | 요청 흐름 복원율 | 요청 한 건의 로그 중 검색으로 회수한 줄의 비율 | **2 / 4줄 (50%)** | **9 / 9줄 (100%)** | **7 / 7줄 (100%)** |
 | 복원에 필요한 검색 횟수 | 위 작업에 쓴 검색 명령 수 | **복원 불가** | **1회** | **1회** |
-| 비동기 구간 추적 성공률 | `@Async` 로그 중 traceId 가 남은 비율 | **0%** | **100%** (67 / 67) | **100%** (71 / 71) |
+| 비동기 구간 추적 성공률 | `@Async` 로그 중 traceId 가 남은 비율 | **0%** | **100%** (67 / 67) | **100%** (66 / 66) |
 | 검색 가능 필드 수 | JSON 최상위 키 (encoder 기본 + 애플리케이션) | **0개** | **22개** (7 + 15) | **21개** (7 + 14) |
-| 민감정보 노출 | 카드번호 평문이 남은 줄 수 | **178줄** (기준이 다르다 — 아래) | **0줄** | **0줄** |
+| 민감정보 노출 | 카드번호 평문이 남은 줄 수 | **176줄** (기준이 다르다 — 아래) | **0줄** | **0줄** |
 | 로그 유실 | 콘솔(동기) 대비 파일(비동기) 누락 줄 수 | — | **0줄** | **0줄** |
-| 추적 사각지대 | 요청 처리 중 traceId 없이 남은 줄 | 전부 | **0줄** | **0줄** |
-| 총 로그량 | 파일 줄 수 | — | 811줄 | 623줄 |
+| 추적 사각지대 | 애플리케이션 로거가 요청 스레드에서 traceId 없이 남긴 줄 | 전부 | **0줄** | **0줄** |
+| 총 로그량 | 파일 줄 수 | — | 811줄 | 622줄 |
+
+`@Async` 줄 수(67 / 66)가 접수 건수와 같은 것은 우연이 아니다.
+`notificationService.sendOrderConfirmation()` 은 결제 승인에 성공한 경로에서만 호출된다.
+
+**추적 사각지대의 정의에 단서가 붙는 이유.** 파일 전체로 세면 traceId 없는 줄이 dev 기준 17줄 있다.
+전부 기동·종료 로그(`main`, `tomcat-shutdown`)와 첫 요청이 유발한 `DispatcherServlet` 지연 초기화다.
+서블릿 초기화는 필터 체인 밖에서 일어나므로 traceId 가 붙을 수 없다.
+지표로 의미가 있는 건 **우리 코드가 요청을 처리하면서 남긴 줄**이고, 그건 0줄이다.
+`measure.sh` 의 `[6]` 이 두 수를 나눠 출력한다.
 
 "복원 불가"의 의미는 [01-diagnosis.md](./01-diagnosis.md) 참고 —
 검색 횟수의 문제가 아니라 로그에 정보가 없는 문제였다.
@@ -67,7 +85,9 @@ $ grep -c '1234-5678-9012-3456' console.txt   # 9a8fefe 실행 결과
 그러니 이 커밋의 노출은 0줄이고, 그 0 은 마스킹이 막아낸 결과가 아니라 **찍을 코드가 없어서** 나온 0 이다.
 Before 로 쓰면 마스킹이 아무것도 안 한 것처럼 보인다.
 
-그래서 이 지표만 기준을 바꿨다. **현재 코드에서 마스킹 세 겹을 모두 걷어낸 상태**를 Before 로 삼는다.
+그래서 이 지표만 기준을 바꿨다. **현재 코드에서 마스킹을 세 지점 모두 걷어낸 상태**를 Before 로 삼는다.
+겹으로는 둘(찍는 쪽 / 나가는 쪽)이고, 나가는 쪽이 콘솔·파일 두 경로라 손댈 곳은 셋이다 —
+[05-masking](./05-masking.md) 참고.
 
 ```bash
 git worktree add --detach /tmp/wt-nomask HEAD
@@ -79,14 +99,16 @@ SPRING_PROFILES_ACTIVE=dev ./gradlew bootRun   # /tmp/wt-nomask 에서
 grep -c '1234-5678-9012-3456' logs/order-app.log
 ```
 
-결과는 **178줄**이고, 출처는 둘이다.
+결과는 **176줄**이고, 출처는 둘이다.
 
 | 유출 줄 | 건수 | 막는 겹 |
 |---|---:|---|
-| `주문 요청 수신 OrderRequest[... cardNumber=1234-5678-9012-3456]` | 101 | 찍는 쪽 — `toString()` 재정의 |
-| `PG 요청 페이로드 cardNumber=1234-5678-9012-3456` | 77 | 나가는 쪽 — encoder / 콘솔 컨버터 |
+| `주문 요청 수신 OrderRequest[... cardNumber=1234-5678-9012-3456]` | 100 | 찍는 쪽 — `toString()` 재정의 |
+| `PG 요청 페이로드 cardNumber=1234-5678-9012-3456` | 76 | 나가는 쪽 — encoder / 콘솔 컨버터 |
 
-101 줄은 요청 전건이다. 77 줄은 재고 확인을 통과해 결제까지 간 요청 수다.
+100 줄은 **컨트롤러에 도달한** 요청 전건이다. 잘못된 JSON 1건은 그 앞에서 깨지므로 이 줄을 남기지 않는다.
+76 줄은 재고 확인을 통과해 결제까지 간 요청 수다(100 − 24). 둘 다 결제 거절 확률과 무관하다 —
+`PG 요청 페이로드` 는 승인 판정 **전에** 찍히기 때문이다. 그래서 이 176 은 실행마다 같다.
 두 번째 줄([`PaymentService`](../src/main/java/com/example/logbackmdclab/order/PaymentService.java))은
 **의도적으로 규약을 어긴 코드**다. 찍는 쪽 규약만으로는 부족하다는 것을 보이려면
 규약을 어긴 줄이 하나는 있어야 나가는 쪽이 실제로 막는지 증명할 수 있다.
@@ -119,49 +141,72 @@ grep -c '1234-5678-9012-3456' logs/order-app.log
 
 ## 검색 한 번으로 복원한 흐름 (dev)
 
+조건은 `traceId` 하나뿐이다. 이대로 실행하면 JSON 9건이 그대로 나온다.
+
 ```bash
 jq 'select(.traceId=="30c7ca5e25cc47e792a14405ba2a3f1a")' samples/dev-run.log
 ```
 
-```
-14:18:21.597  http-nio-8080-exec-16  OrderController       주문 요청 수신 OrderRequest[userId=u18, ..., cardNumber=****-3456]
-14:18:21.598  http-nio-8080-exec-16  OrderService          주문 접수 시작 userId=u18 productId=TV-18 quantity=1
-14:18:21.599  http-nio-8080-exec-16  InventoryService      재고 확인 요청 productId=TV-18 quantity=1
-14:18:21.669  http-nio-8080-exec-16  InventoryService      재고 확인 응답 productId=TV-18 enough=true
-14:18:21.669  http-nio-8080-exec-16  PaymentService        결제 승인 요청 amount=10000
-14:18:21.669  http-nio-8080-exec-16  PaymentService        PG 요청 페이로드 cardNumber=****-****-****-****
-14:18:21.746  http-nio-8080-exec-16  PaymentService        결제 승인 완료 paymentStatus=APPROVED amount=10000
-14:18:21.746  http-nio-8080-exec-16  OrderService          주문 접수 완료 status=RECEIVED
-14:18:21.746  task-3                 NotificationService   주문 확인 알림 발송
+흐름을 눈으로 따라가려면 네 필드만 뽑는다.
+
+```bash
+jq -r 'select(.traceId=="30c7ca5e25cc47e792a14405ba2a3f1a")
+       | "\(.["@timestamp"][11:23])  \(.thread_name)  \(.logger_name | split(".") | last)  \(.message)"' \
+   samples/dev-run.log
 ```
 
-811줄이 뒤섞인 파일에서 이 9줄만 나온다.
+```
+14:18:21.597  http-nio-8080-exec-16  OrderController  주문 요청 수신 OrderRequest[userId=u18, productId=TV-18, quantity=1, cardNumber=****-3456]
+14:18:21.598  http-nio-8080-exec-16  OrderService  주문 접수 시작 userId=u18 productId=TV-18 quantity=1
+14:18:21.599  http-nio-8080-exec-16  InventoryService  재고 확인 요청 productId=TV-18 quantity=1
+14:18:21.669  http-nio-8080-exec-16  InventoryService  재고 확인 응답 productId=TV-18 enough=true
+14:18:21.669  http-nio-8080-exec-16  PaymentService  결제 승인 요청 amount=10000
+14:18:21.669  http-nio-8080-exec-16  PaymentService  PG 요청 페이로드 cardNumber=****-****-****-****
+14:18:21.746  http-nio-8080-exec-16  PaymentService  결제 승인 완료 paymentStatus=APPROVED amount=10000
+14:18:21.746  http-nio-8080-exec-16  OrderService  주문 접수 완료 status=RECEIVED
+14:18:21.746  task-3  NotificationService  주문 확인 알림 발송
+```
+
+여러 요청이 뒤섞인 파일에서 이 9줄만 나온다.
 마지막 줄에서 스레드가 `exec-16` → `task-3` 로 바뀌지만 traceId 는 끊기지 않는다.
 
 ## 결제 거절 흐름
 
+```bash
+jq -r 'select(.traceId=="e667d17cfe9e4eb7a7747ef94659f33e")
+       | "\(.level | . + "     " | .[0:6]) \(.logger_name | split(".") | last)  \(.message)"' \
+   samples/dev-run.log
 ```
-INFO   OrderController         주문 요청 수신 ... cardNumber=****-3456
-INFO   OrderService            주문 접수 시작 userId=u77 productId=TV-77 quantity=1
-DEBUG  InventoryService        재고 확인 요청 productId=TV-77 quantity=1
-INFO   InventoryService        재고 확인 응답 productId=TV-77 enough=true
-INFO   PaymentService          결제 승인 요청 amount=10000
-DEBUG  PaymentService          PG 요청 페이로드 cardNumber=****-****-****-****
-WARN   PaymentService          결제 승인 거절 paymentStatus=DECLINED reason=PG_DECLINED
+
+```
+INFO   OrderController  주문 요청 수신 OrderRequest[userId=u22, productId=TV-22, quantity=1, cardNumber=****-3456]
+INFO   OrderService  주문 접수 시작 userId=u22 productId=TV-22 quantity=1
+DEBUG  InventoryService  재고 확인 요청 productId=TV-22 quantity=1
+INFO   InventoryService  재고 확인 응답 productId=TV-22 enough=true
+INFO   PaymentService  결제 승인 요청 amount=10000
+DEBUG  PaymentService  PG 요청 페이로드 cardNumber=****-****-****-****
+WARN   PaymentService  결제 승인 거절 paymentStatus=DECLINED reason=PG_DECLINED
 WARN   GlobalExceptionHandler  주문 실패 status=FAILED reason=PG_DECLINED
 ```
 
 마지막 줄은 `OrderService` **밖**에서 찍힌다. 그런데도 `orderId` 가 붙어 있다 —
 MDC 스코프를 계층이 아니라 요청 경계가 소유하기 때문이다([03](./03-mdc-propagation.md) 참고).
+`OrderFlowTest.PaymentDeclined.failureLogStillCarriesOrderId()` 가 이 불변식을 고정한다.
 
 ## 컨트롤러에 도달하기 전에 깨진 요청
 
-```json
-{"traceId":"003c843b6d8547119d86c90a3b42c6a0","orderId":null,"level":"WARN",
- "status":"REJECTED","httpStatus":400,"logger_name":"...GlobalExceptionHandler"}
+이 요청은 줄을 하나만 남긴다. 관심 있는 필드만 뽑으면 이렇다.
+
+```bash
+jq -c 'select(.traceId=="f63f5af232ad448a920dae159c42ad29")
+       | {traceId, orderId, level, status, httpStatus, exceptionType}' samples/dev-run.log
 ```
 
-`orderId` 는 없다. 만들어지기 전에 실패했기 때문이다.
+```json
+{"traceId":"f63f5af232ad448a920dae159c42ad29","orderId":null,"level":"WARN","status":"REJECTED","httpStatus":400,"exceptionType":"HttpMessageNotReadableException"}
+```
+
+`orderId` 는 `null` 이다. 만들어지기 전에 실패했기 때문이다.
 이 요청에 대해 고객이 CS 에 건넬 수 있는 값은 응답 헤더·본문으로 나간 traceId 뿐이다.
 
 ## 검색 가능 필드

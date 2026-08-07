@@ -9,6 +9,24 @@
 콘솔은 동기 appender 라 유실이 없으므로 이걸 기준선으로 삼는다.
 비교 대상은 애플리케이션 로거(`com.example.logbackmdclab`)가 요청 처리 중 남긴 줄이다.
 
+### 재현 절차
+
+콘솔을 기준선으로 쓰려면 콘솔 출력을 파일로 남겨야 한다. `tee` 로 받는다.
+
+```bash
+# 터미널 1 — 콘솔을 남기면서 띄운다
+SPRING_PROFILES_ACTIVE=dev ./gradlew bootRun | tee /tmp/console.log
+
+# 터미널 2
+./scripts/load.sh 100
+./scripts/measure.sh logs/order-app.log /tmp/console.log
+```
+
+`measure.sh` 에 콘솔 로그를 두 번째 인자로 주면 `[8]` 항목이 양쪽을 레벨별로 집계해 유실을 뺀다.
+아래 표는 그 출력이다.
+
+> 큐 설정은 `app.logging.async.*` 로 주입되므로 XML 을 고치지 않고 실행 인자만 바꿔 비교할 수 있다.
+
 ### 위험한 설정
 
 ```bash
@@ -58,12 +76,16 @@ SPRING_PROFILES_ACTIVE=dev ./gradlew bootRun
 
 ## 명시한 값 네 개
 
+XML 은 값을 직접 적지 않고 `springProperty` 로 받는다. 값의 소유자는 `application.yml` 이다
+([02-profile-split](./02-profile-split.md#소유권) 의 원칙과 같다).
+덕분에 위 재현 절차처럼 실행 인자로 바꿔 끼울 수 있다.
+
 ```xml
 <appender name="ASYNC_FILE" class="ch.qos.logback.classic.AsyncAppender">
-    <queueSize>2048</queueSize>
-    <discardingThreshold>0</discardingThreshold>
-    <neverBlock>false</neverBlock>
-    <maxFlushTime>5000</maxFlushTime>
+    <queueSize>${ASYNC_QUEUE_SIZE}</queueSize>                        <!-- 기본 2048 -->
+    <discardingThreshold>${ASYNC_DISCARDING_THRESHOLD}</discardingThreshold>  <!-- 기본 0 -->
+    <neverBlock>${ASYNC_NEVER_BLOCK}</neverBlock>                     <!-- 기본 false -->
+    <maxFlushTime>${ASYNC_MAX_FLUSH_TIME}</maxFlushTime>              <!-- 기본 5000 -->
 </appender>
 ```
 
