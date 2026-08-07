@@ -1,126 +1,155 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
 
-    <property name="LOG_PATTERN"
-              value="%d{HH:mm:ss.SSS} %-5level [%thread] [%X{traceId:-NO_TRACE}] %logger{36} - %msg%n"/>
+    <!--
+      Spring Boot 기본 정의를 먼저 들인다. %correlationId 컨버터가 여기서 등록된다.
+      지금은 쓰지 않지만, Micrometer Tracing 으로 옮길 때 패턴만 바꾸면 되도록 자리를 잡아둔다.
+    -->
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
 
-    <!-- 1234-5678-9012-3456 / 1234567890123456 둘 다 -->
-    <property name="CARD_NUMBER_REGEX" value="\d{4}-?\d{4}-?\d{4}-?\d{4}"/>
+    <!--
+      환경별로 달라지는 값은 전부 application-{env}.yml 이 소유한다.
+      이 파일은 "어디에 어떤 모양으로 쓸지"(appender/encoder) 구조만 담는다.
+      그래서 dev 와 prod 가 같은 appender 정의를 공유한다 — 마스킹 설정이 저장소에 정확히 한 벌만 존재한다.
+    -->
+    <springProperty scope="context" name="APP_NAME" source="spring.application.name" defaultValue="app"/>
+    <springProperty scope="context" name="LOG_ENV" source="app.logging.env" defaultValue="local"/>
+    <springProperty scope="context" name="LOG_FILE" source="app.logging.file" defaultValue="logs/order-app.log"/>
+    <springProperty scope="context" name="LOG_MAX_FILE_SIZE" source="app.logging.max-file-size" defaultValue="100MB"/>
+    <springProperty scope="context" name="LOG_MAX_HISTORY" source="app.logging.max-history" defaultValue="3"/>
+    <springProperty scope="context" name="LOG_TOTAL_SIZE_CAP" source="app.logging.total-size-cap" defaultValue="1GB"/>
+    <springProperty scope="context" name="ASYNC_QUEUE_SIZE" source="app.logging.async.queue-size" defaultValue="2048"/>
+    <springProperty scope="context" name="ASYNC_DISCARDING_THRESHOLD" source="app.logging.async.discarding-threshold" defaultValue="0"/>
+    <springProperty scope="context" name="ASYNC_NEVER_BLOCK" source="app.logging.async.never-block" defaultValue="false"/>
+    <springProperty scope="context" name="ASYNC_MAX_FLUSH_TIME" source="app.logging.async.max-flush-time" defaultValue="5000"/>
+
+    <!-- 값 끝의 공백은 XML 파싱에서 잘린다. 구분자 " - " 는 pattern 안쪽에 둔다. -->
+    <property name="LOG_PREFIX"
+              value="%d{HH:mm:ss.SSS} %-5level [%thread] [%X{traceId:-NO_TRACE}] [%X{orderId:-}] %logger{36}"/>
+
+    <!--
+      마스킹 정규식이 둘인 이유는 적용 대상이 다르기 때문이다.
+
+      콘솔(BROAD)  — %replace 가 %msg 에만 걸린다. traceId·orderId 는 %X{} 로 따로 찍혀
+                     치환 범위 밖이므로, 구분자 없는 16자리까지 넓게 잡아도 안전하다.
+      파일(STRICT) — MaskingJsonGeneratorDecorator 의 값 정규식은 JSON 의 "모든 문자열 값"에 걸린다.
+                     traceId 는 32 hex 라 (?<!\d)\d{15,16}(?!\d) 같은 정규식을 쓰면
+                     그 안의 숫자 구간이 통째로 가려진다. 이 프로젝트의 핵심 지표를 스스로 깨는 설정이다.
+
+                     그렇다고 구분자 있는 형태만 잡으면 구분자 없는 16자리가 message 에 남는다.
+                     <path>cardNumber</path> 는 필드 값만 가릴 뿐, kv() 가 message 에 함께 렌더한
+                     "cardNumber=1234567890123456" 텍스트는 건드리지 못하기 때문이다.
+
+                     그래서 경계를 숫자가 아니라 hex 로 잡는다 — (?<![0-9a-fA-F])(?![0-9a-fA-F]).
+                     32 hex 안의 16자리 숫자 구간은 한쪽 이웃이 반드시 a-f 다.
+                     (이웃도 숫자라면 연속 길이가 16을 넘어 애초에 매칭되지 않는다.)
+                     자유 텍스트의 카드번호는 이웃이 '=' 나 공백이라 그대로 걸린다.
+    -->
+    <property scope="context" name="CARD_REGEX_BROAD"
+              value="(?&lt;!\d)(?:\d{4}[ -]?){3}\d{4}(?!\d)|(?&lt;!\d)\d{15,16}(?!\d)"/>
+    <property name="CARD_REGEX_STRICT"
+              value="(?&lt;!\d)\d{4}[ -]\d{4}[ -]\d{4}[ -]\d{4}(?!\d)|(?&lt;![0-9a-fA-F])\d{15,16}(?![0-9a-fA-F])"/>
+    <property scope="context" name="CARD_MASK" value="****-****-****-****"/>
+
+    <!--
+      콘솔은 사람이 눈으로 읽는다. 모든 환경에서 텍스트.
+      %maskedMsg 는 아래 conversionRule 로 등록한 컨버터다 — 메시지와 스택트레이스를 함께 가린다.
+      %replace(%msg) 로는 스택트레이스를 덮지 못한다. 예외는 %msg 밖이고,
+      패턴에 예외 컨버터가 없으면 Logback 이 끝에 하나를 자동으로 붙이기 때문이다.
+    -->
+    <conversionRule conversionWord="maskedMsg"
+                    class="com.example.logbackmdclab.common.MaskingMessageConverter"/>
 
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
-        <!-- 콘솔은 사람이 눈으로 읽는다. 모든 환경에서 텍스트 -->
         <encoder>
-            <pattern>${LOG_PATTERN}</pattern>
+            <pattern>${LOG_PREFIX} - %maskedMsg{CARD_REGEX_BROAD,CARD_MASK}%n</pattern>
         </encoder>
     </appender>
 
-    <!--
-      공통 기본값. 프로파일을 하나도 주지 않아도 최소한 콘솔에는 나온다.
-      프로파일 블록에는 "이 환경에서 달라지는 것"만 적는다.
-    -->
+    <!-- 공통 기본값. 프로파일을 하나도 주지 않아도 최소한 콘솔에는 나온다. -->
     <root level="INFO">
         <appender-ref ref="CONSOLE"/>
     </root>
 
-    <!-- 개발 PC: 재고 확인 같은 내부 흐름까지 콘솔로 다 본다 -->
-    <springProfile name="local">
-        <logger name="com.example.logbackmdclab" level="DEBUG"/>
-    </springProfile>
+    <!--
+      파일 로깅은 dev/prod 공통이다. 달라지는 것(보관 일수·총량)은 전부 yml 에서 온다.
+      이전에는 이 블록이 두 프로파일에 통째로 복사돼 있었고, 그 복사본 안에 마스킹 설정이 들어 있었다.
+      보안 통제가 두 군데 있으면 언젠가 한쪽만 고친다.
+    -->
+    <springProfile name="dev | prod">
 
-    <!-- 팀 공용 개발 서버: 콘솔에 더해 파일로도 남긴다. 보관은 3일이면 충분 -->
-    <springProfile name="dev">
         <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-            <file>logs/order-app.log</file>
-            <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-                <fileNamePattern>logs/order-app.%d{yyyy-MM-dd}.log.gz</fileNamePattern>
-                <maxHistory>3</maxHistory>
+            <file>${LOG_FILE}</file>
+            <!--
+              TimeBasedRollingPolicy 만 쓰면 롤오버 트리거가 자정뿐이라
+              트래픽이 튀는 날엔 활성 파일 하나가 디스크가 찰 때까지 커진다.
+              totalSizeCap 은 아카이브 합계만 보므로 활성 파일을 막지 못한다.
+              파일 하나의 상한(maxFileSize)과 총량 상한(totalSizeCap)은 서로 다른 문제다.
+            -->
+            <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+                <fileNamePattern>${LOG_FILE}.%d{yyyy-MM-dd}.%i.gz</fileNamePattern>
+                <maxFileSize>${LOG_MAX_FILE_SIZE}</maxFileSize>
+                <maxHistory>${LOG_MAX_HISTORY}</maxHistory>
+                <totalSizeCap>${LOG_TOTAL_SIZE_CAP}</totalSizeCap>
             </rollingPolicy>
+
             <!--
               파일은 사람이 아니라 수집기가 읽는다. 그래서 JSON.
-              MDC(traceId)는 LogstashEncoder가 알아서 최상위 필드로 꺼내준다.
+              MDC(traceId, orderId)는 LogstashEncoder 가 알아서 최상위 필드로 꺼내준다.
             -->
             <encoder class="net.logstash.logback.encoder.LogstashEncoder">
                 <timeZone>Asia/Seoul</timeZone>
                 <!--
-                  나가는 길목에서 한 번 더 막는다.
-                  찍는 쪽에서 실수해도 파일에는 남지 않는다.
+                  수집기로 보내는 순간 여러 앱·환경·인스턴스의 줄이 한 인덱스에 섞인다.
+                  그걸 나눌 필드가 없으면 traceId 로 요청은 묶여도 어느 환경의 것인지 알 수 없다.
                 -->
+                <customFields>{"service":"${APP_NAME}","env":"${LOG_ENV}"}</customFields>
+                <includeContext>false</includeContext>
+
+                <!-- 나가는 길목에서 한 번 더 막는다. 찍는 쪽에서 실수해도 파일에는 남지 않는다. -->
                 <jsonGeneratorDecorator class="net.logstash.logback.mask.MaskingJsonGeneratorDecorator">
-                    <defaultMask>****</defaultMask>
+                    <defaultMask>${CARD_MASK}</defaultMask>
+                    <!-- 필드 단위: 구조화 필드로 찍힌 카드번호는 형식과 무관하게 가린다 -->
+                    <path>cardNumber</path>
+                    <!--
+                      값 단위: 자유 텍스트 메시지 안에 섞인 카드번호까지.
+                      <mask> 를 생략하면 위 defaultMask 가 아니라 라이브러리 자체 기본값("****")이 쓰인다.
+                      경로 마스킹과 결과가 달라지므로 명시한다.
+                    -->
                     <valueMask>
-                        <value>${CARD_NUMBER_REGEX}</value>
+                        <value>${CARD_REGEX_STRICT}</value>
+                        <mask>${CARD_MASK}</mask>
                     </valueMask>
                 </jsonGeneratorDecorator>
             </encoder>
         </appender>
 
         <!--
-          파일 쓰기는 디스크 I/O다. 요청 스레드가 여기서 기다리지 않도록
+          파일 쓰기는 디스크 I/O 다. 요청 스레드가 여기서 기다리지 않도록
           큐에 던지고 별도 스레드가 꺼내 쓰게 한다.
         -->
         <appender name="ASYNC_FILE" class="ch.qos.logback.classic.AsyncAppender">
             <appender-ref ref="FILE"/>
-            <queueSize>2048</queueSize>
+            <queueSize>${ASYNC_QUEUE_SIZE}</queueSize>
             <!--
-              기본값은 queueSize/5다. 큐 여유가 그 아래로 떨어지면
-              WARN 미만(INFO·DEBUG)을 말없이 버린다. 0으로 꺼둔다.
+              기본값은 queueSize/5 다. 큐 여유가 그 아래로 떨어지면
+              WARN 미만(INFO·DEBUG)을 말없이 버린다. 0 으로 꺼둔다.
             -->
-            <discardingThreshold>0</discardingThreshold>
+            <discardingThreshold>${ASYNC_DISCARDING_THRESHOLD}</discardingThreshold>
             <!--
               그래도 꽉 차면 버리지 말고 잠깐 기다린다.
               로그가 사라지는 것보다 응답이 조금 느린 편이 낫다.
             -->
-            <neverBlock>false</neverBlock>
+            <neverBlock>${ASYNC_NEVER_BLOCK}</neverBlock>
+            <!--
+              종료 시 큐에 남은 것을 비우는 데 허용하는 시간. 기본값 1초는 명시되지 않은 네 번째 값이다.
+              큐 2048건을 비우기에 1초는 빠듯하다. 위 세 값을 "기본값을 믿지 않는다"는 이유로
+              명시해 놓고 이것만 비워두면 같은 실수를 반복하는 것이다.
+            -->
+            <maxFlushTime>${ASYNC_MAX_FLUSH_TIME}</maxFlushTime>
         </appender>
-
-        <logger name="com.example.logbackmdclab" level="DEBUG"/>
 
         <root>
-            <appender-ref ref="ASYNC_FILE"/>
-        </root>
-    </springProfile>
-
-    <!--
-      운영: 우리 코드는 INFO, 프레임워크 소음은 WARN 이상만.
-      장애 분석에 필요하니 30일 보관하되 디스크가 터지지 않게 총량을 막는다.
-    -->
-    <springProfile name="prod">
-        <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-            <file>logs/order-app.log</file>
-            <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-                <fileNamePattern>logs/order-app.%d{yyyy-MM-dd}.log.gz</fileNamePattern>
-                <maxHistory>30</maxHistory>
-                <totalSizeCap>3GB</totalSizeCap>
-            </rollingPolicy>
-            <encoder class="net.logstash.logback.encoder.LogstashEncoder">
-                <timeZone>Asia/Seoul</timeZone>
-                <!--
-                  나가는 길목에서 한 번 더 막는다.
-                  찍는 쪽에서 실수해도 파일에는 남지 않는다.
-                -->
-                <jsonGeneratorDecorator class="net.logstash.logback.mask.MaskingJsonGeneratorDecorator">
-                    <defaultMask>****</defaultMask>
-                    <valueMask>
-                        <value>${CARD_NUMBER_REGEX}</value>
-                    </valueMask>
-                </jsonGeneratorDecorator>
-            </encoder>
-        </appender>
-
-        <!--
-          운영에서는 유실이 더 치명적이다. dev와 같은 값을 쓴다.
-          discardingThreshold=0이 없으면 큐가 차는 순간 INFO가 조용히 사라진다.
-        -->
-        <appender name="ASYNC_FILE" class="ch.qos.logback.classic.AsyncAppender">
-            <appender-ref ref="FILE"/>
-            <queueSize>2048</queueSize>
-            <discardingThreshold>0</discardingThreshold>
-            <neverBlock>false</neverBlock>
-        </appender>
-
-        <logger name="com.example.logbackmdclab" level="INFO"/>
-
-        <root level="WARN">
             <appender-ref ref="ASYNC_FILE"/>
         </root>
     </springProfile>

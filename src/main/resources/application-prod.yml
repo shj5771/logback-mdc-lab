@@ -1,0 +1,12 @@
+# 운영: 우리 코드는 INFO, 프레임워크 소음은 WARN 이상만.
+# 장애 분석에 필요하니 30일 보관하되 파일 하나와 총량 양쪽으로 상한을 건다.
+app:
+  logging:
+    env: prod
+    max-history: 30
+    total-size-cap: 3GB
+
+logging:
+  level:
+    root: WARN
+    com.example.logbackmdclab: INFO

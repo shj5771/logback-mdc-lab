@@ -1,0 +1,11 @@
+# 개발 PC: 파일은 남기지 않는다. 콘솔로 내부 흐름까지 다 본다.
+app:
+  logging:
+    env: local
+
+logging:
+  level:
+    com.example.logbackmdclab: DEBUG
+    # docs/01-diagnosis.md 의 "내 코드가 아닌 프레임워크 로그에도 traceId 가 붙는다" 를
+    # 실제로 눈으로 확인하기 위한 한 줄. 잘못된 JSON 을 보내면 이 로거가 찍는다.
+    org.springframework.web.servlet.mvc.method.annotation.ExceptionHandlerExceptionResolver: DEBUG
