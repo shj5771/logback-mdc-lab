@@ -1,0 +1,201 @@
+# 사용법
+# IntelliJ Ultimate 의 HTTP Client 로 실행한다. Postman 없이 이 파일 하나로 끝난다.
+#   1. 앱을 먼저 띄운다  — ./gradlew bootRun  (기본 프로파일 local)
+#   2. 편집기 우상단 환경 선택에서 local 을 고른다  ({{host}} 가 여기서 온다)
+#   3. 각 요청 왼쪽 ▶ 를 누른다. Services 창에 응답·헤더·테스트 결과가 뜬다
+#
+# 8080 이 다른 앱에 잡혀 있으면 앱을 8099 로 띄우고 환경을 local-alt 로 바꾼다.
+#   ./gradlew bootRun --args='--server.port=8099'
+#
+# 전체를 한 번에 돌리려면 (IntelliJ 없이도 같은 엔진으로 실행된다):
+#   brew install ijhttp
+#   ijhttp --env-file http/http-client.env.json --env local http/orders.http
+
+### 1. 주문 - 성공 경로 (200 RECEIVED)
+# 응답 헤더 X-Trace-Id 를 global 변수로 잡아둔다. 아래 요청들과 로그 grep 에 쓴다.
+POST {{host}}/orders
+Content-Type: application/json
+
+{
+  "userId": "u1",
+  "productId": "TV-1",
+  "quantity": 1,
+  "cardNumber": "1234-5678-9012-3456"
+}
+
+> {%
+    client.global.set("traceId", response.headers.valueOf("X-Trace-Id"));
+    client.log("traceId = " + client.global.get("traceId"));
+
+    client.test("200 으로 접수된다", function () {
+        client.assert(response.status === 200, "status = " + response.status);
+        client.assert(response.body.status === "RECEIVED", "body.status = " + response.body.status);
+    });
+    client.test("traceId 는 하이픈 없는 32 hex 다", function () {
+        client.assert(/^[0-9a-f]{32}$/.test(client.global.get("traceId")));
+    });
+    client.test("orderId 가 응답에 실린다", function () {
+        client.assert(/^ORD-/.test(response.body.orderId), "orderId = " + response.body.orderId);
+    });
+%}
+
+### 2. 주문 - 재고 부족 (200 REJECTED)
+# TV-3 은 Math.abs("TV-3".hashCode()) % 4 == 0 이라 항상 재고 부족이다. 결정적으로 재현된다.
+# 실패지만 HTTP 는 200 이다 — 요청 처리 자체는 성공했고, 거절은 업무 결과라서 body 로 알린다.
+POST {{host}}/orders
+Content-Type: application/json
+
+{
+  "userId": "u1",
+  "productId": "TV-3",
+  "quantity": 1,
+  "cardNumber": "1234-5678-9012-3456"
+}
+
+> {%
+    client.test("업무 거절은 200 + body 로 알린다", function () {
+        client.assert(response.status === 200, "status = " + response.status);
+        client.assert(response.body.status === "REJECTED");
+        client.assert(response.body.reason === "OUT_OF_STOCK", "reason = " + response.body.reason);
+    });
+%}
+
+### 3. 주문 - 잘못된 JSON (400)
+# quantity 가 문자열이라 컨트롤러에 닿기 전에 역직렬화가 깨진다.
+# GlobalExceptionHandler 가 가로채지 않으면 본문 없는 기본 에러가 나가고, 고객은 CS 에 건넬 식별자가 없다.
+POST {{host}}/orders
+Content-Type: application/json
+
+{
+  "userId": "u1",
+  "productId": "TV-1",
+  "quantity": "두개",
+  "cardNumber": "1234-5678-9012-3456"
+}
+
+> {%
+    client.test("실패 응답에도 traceId 가 실린다", function () {
+        client.assert(response.status === 400, "status = " + response.status);
+        client.assert(response.body.code === "BAD_REQUEST");
+        client.assert(/^[0-9a-f]{32}$/.test(response.body.traceId), "traceId = " + response.body.traceId);
+    });
+    client.test("응답 헤더와 본문의 traceId 가 같다", function () {
+        client.assert(response.body.traceId === response.headers.valueOf("X-Trace-Id"));
+    });
+%}
+
+### 4. 컨트롤러에 매핑 없는 메서드 (405)
+# 405 도 Spring MVC 가 자체 처리하는 예외다. 3번과 같은 경로로 traceId 가 실리는지 본다.
+GET {{host}}/orders
+
+> {%
+    client.test("405 응답도 traceId 를 달고 나간다", function () {
+        client.assert(response.status === 405, "status = " + response.status);
+        client.assert(/^[0-9a-f]{32}$/.test(response.body.traceId));
+    });
+%}
+
+### 5. traceId 를 클라이언트가 지정해서 보내기
+# TraceIdFilter 가 인바운드 헤더를 이어받는지 확인한다. 영숫자 8~64자만 통과한다.
+POST {{host}}/orders
+X-Trace-Id: manualtrace0001
+Content-Type: application/json
+
+{
+  "userId": "u1",
+  "productId": "TV-1",
+  "quantity": 2,
+  "cardNumber": "1234-5678-9012-3456"
+}
+
+> {%
+    client.test("보낸 traceId 를 그대로 이어받는다", function () {
+        client.assert(response.headers.valueOf("X-Trace-Id") === "manualtrace0001");
+    });
+%}
+
+### 6. 형식을 어긴 traceId 는 버려진다
+# 공백·개행이 섞인 값을 MDC 에 그대로 넣으면 가짜 로그 줄을 만들 수 있다.
+# 필터가 걸러내고 새 traceId 를 발급해야 한다.
+POST {{host}}/orders
+X-Trace-Id: bad id!
+Content-Type: application/json
+
+{
+  "userId": "u1",
+  "productId": "TV-1",
+  "quantity": 1,
+  "cardNumber": "1234-5678-9012-3456"
+}
+
+> {%
+    client.test("오염된 헤더는 무시하고 새로 발급한다", function () {
+        var id = response.headers.valueOf("X-Trace-Id");
+        client.assert(id !== "bad id!", "그대로 통과했다: " + id);
+        client.assert(/^[0-9a-f]{32}$/.test(id), "id = " + id);
+    });
+%}
+
+### 7. 결제 거절 (402)
+# PaymentService 의 거절률 기본값은 10% 라 그냥 누르면 확률적으로만 뜬다.
+# 결정적으로 보려면 앱을 이렇게 띄운다:
+#   ./gradlew bootRun --args='--app.payment.decline-rate-percent=100'
+# 그때만 아래 테스트가 통과한다 (거절률이 0/10 이면 200 RECEIVED 가 정상이다).
+POST {{host}}/orders
+Content-Type: application/json
+
+{
+  "userId": "u1",
+  "productId": "TV-1",
+  "quantity": 3,
+  "cardNumber": "1234-5678-9012-3456"
+}
+
+> {%
+    if (response.status === 402) {
+        client.test("결제 거절은 402 + PAYMENT_DECLINED", function () {
+            client.assert(response.body.code === "PAYMENT_DECLINED");
+        });
+    } else {
+        client.log("이번엔 승인됐다 (status " + response.status + "). 거절을 보려면 decline-rate-percent=100 으로 띄운다.");
+    }
+%}
+
+### 8. 로그 레벨 확인
+GET {{host}}/actuator/loggers/com.example.logbackmdclab.order
+
+> {%
+    client.test("레벨 조회가 열려 있다", function () {
+        client.assert(response.status === 200, "status = " + response.status);
+        client.log("effectiveLevel = " + response.body.effectiveLevel);
+    });
+%}
+
+### 9. 로그 레벨 변경 (재배포 없이)
+# 204 로 응답한다. 바꾼 뒤 1번을 다시 눌러 콘솔에 DEBUG 줄이 늘어나는지 본다.
+POST {{host}}/actuator/loggers/com.example.logbackmdclab.order
+Content-Type: application/json
+
+{
+  "configuredLevel": "DEBUG"
+}
+
+> {%
+    client.test("레벨 변경은 204 로 끝난다", function () {
+        client.assert(response.status === 204, "status = " + response.status);
+    });
+%}
+
+### 10. 로그 레벨 되돌리기
+POST {{host}}/actuator/loggers/com.example.logbackmdclab.order
+Content-Type: application/json
+
+{
+  "configuredLevel": null
+}
+
+> {%
+    client.test("설정 해제도 204", function () {
+        client.assert(response.status === 204, "status = " + response.status);
+    });
+%}
