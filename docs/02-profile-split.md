@@ -34,10 +34,46 @@ XML 은 `<springProperty>` 로 yml 값을 읽는다.
 `spring.profiles.default: local` 을 명시했다. 이게 없으면 프로파일 없이 뜬 앱은
 local 도 dev 도 prod 도 아닌 **네 번째 상태**가 된다. 그 상태에서만 나는 버그를 만들지 않기 위해서다.
 
-프로파일 이름은 컴파일러도 Spring 도 검증하지 않는다.
-`--spring.profiles.active=devv` 같은 오타는 예외도 경고도 없이 파일 로깅을 통째로 빼놓고 정상 기동한다.
-이 프로젝트가 [AsyncAppender](./04-async-appender-loss.md)에서 논증한 "조용한 실패"와 같은 종류다.
-현재는 기본값 명시로 무프로파일 상태만 없앤 상태이고, 오타 자체는 여전히 막지 못한다.
+## 오타는 기본값이 막아주지 않는다
+
+`spring.profiles.default` 는 프로파일을 **하나도** 주지 않은 경우만 막는다.
+`prodd` 처럼 **틀리게** 준 것은 활성 프로파일이 하나 있는 상태이므로 기본값이 끼어들지 않는다.
+`application-prodd.yml` 은 없으니 아무것도 읽히지 않고, 결과는 무프로파일과 같은 네 번째 상태다.
+
+실측 — `SPRING_PROFILES_ACTIVE=prodd` 로 띄운 뒤 주문 1건:
+
+| | 관측 |
+|---|---|
+| 기동 | 성공 (1.19초) |
+| 경고·예외 | 없음 |
+| `POST /orders` | `200` + `orderId` 정상 발급 |
+| 로그 파일 | **생성되지 않음** — `<springProfile name="dev \| prod">` 에 걸리지 않는다 |
+| 콘솔 | 7줄 전부 INFO. DEBUG 0줄 — `application-local.yml` 이 읽히지 않으므로 |
+
+앱은 완벽하게 동작하고 로그만 사라진다.
+[AsyncAppender](./04-async-appender-loss.md)에서 논증한 "조용한 실패"와 같은 종류다.
+
+### 기동 시 검사로 닫았다
+
+`ProfileValidator` 가 활성 프로파일이 `local / dev / prod` 중 하나인지 보고, 아니면 기동을 실패시킨다.
+
+```
+알 수 없는 프로파일: [prodd]. 허용: [prod, dev, local]. 오타로 뜨면 파일 로깅이 조용히 빠진다.
+```
+
+활성 프로파일이 **빈 배열이면 통과**시킨다. 프로파일을 주지 않은 실행은 위의 `default: local` 이 맡기 때문이고,
+여기서 막으면 인자 없는 `./gradlew bootRun` 이 기동에 실패한다.
+
+| 실행 | 기동 |
+|---|---|
+| `./gradlew bootRun` | 성공 |
+| `SPRING_PROFILES_ACTIVE=dev` | 성공 |
+| `SPRING_PROFILES_ACTIVE=prod` | 성공 |
+| `SPRING_PROFILES_ACTIVE=prodd` | **실패** |
+
+`ProfileValidatorTest` 는 `validate()` 를 직접 부르지 않고 컨텍스트를 띄워 검증한다.
+`@Component` 나 `@PostConstruct` 가 빠지면 검사 자체가 실행되지 않는데,
+메서드를 직접 부르는 테스트는 그 사고를 통과시키기 때문이다.
 
 ## `logback.xml` 에서 `<springProfile>` 이 무시된다는 설명은 사실과 다르다
 

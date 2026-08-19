@@ -197,7 +197,7 @@ src/main/java/com/example/logbackmdclab/
 ## 테스트
 
 ```bash
-./gradlew test      # 53개
+./gradlew test      # 61개
 ```
 
 로그가 산출물인 프로젝트라 "로그가 이렇게 찍혔다"를 단언할 수단이 필요하다.
