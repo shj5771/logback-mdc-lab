@@ -59,6 +59,8 @@ POST /orders  →  OrderController        HTTP 만
 | 8 | 실패 경로 추적 — 예외 응답에 `traceId` 노출 | 6 | [03-mdc-propagation](./docs/03-mdc-propagation.md) |
 | 9 | After 실측 및 결과 정리 | 전체 | [06-measurement](./docs/06-measurement.md) |
 
+단계별 기록이 관심사 하나씩을 다룬다면, [07-request-lifecycle](./docs/07-request-lifecycle.md) 은 그것들이 요청 하나에서 어떤 순서로 맞물리는지 꿴다 — 기동부터 MDC 정리까지의 전 구간이다.
+
 ## 측정
 
 동시 100건 + 잘못된 JSON 1건. 전 과정을 [`scripts/`](./scripts) 로 재현할 수 있다.
